@@ -9,3 +9,4 @@
 - Added the Twilio WhatsApp `/webhook` route for inbound sandbox testing.
 - Relaxed the Pillow pin so dependencies install on Python 3.14.
 - Updated the build plan to use Gemini-based intent detection and voice-note transcription.
+- Replaced the hard-coded Gemini key in `.env.example` with a placeholder.
