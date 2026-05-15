@@ -47,13 +47,7 @@ class WeatherAgent:
         max_rain_chance = weather.get("max_rain_chance")
 
         if not self.client:
-            return {
-                "agent": "weather_agent",
-                "confidence": 0,
-                "urgency": "low",
-                "urdu_message": "موسمی مشورہ ابھی دستیاب نہیں ہے، براہ کرم بعد میں کوشش کریں۔",
-                "extra": self._format_extra(temperature, max_rain_chance),
-            }
+            return self._rule_based_response(temperature, max_rain_chance)
 
         context = {
             "temperature_c": temperature,
@@ -68,13 +62,7 @@ class WeatherAgent:
         ]
         result = await asyncio.to_thread(self.client.generate_json, parts)
         if not isinstance(result, dict):
-            return {
-                "agent": "weather_agent",
-                "confidence": 0,
-                "urgency": "low",
-                "urdu_message": "اس وقت موسم کا مشورہ نہیں مل سکا۔ براہ کرم بعد میں دوبارہ پوچھیں۔",
-                "extra": self._format_extra(temperature, max_rain_chance),
-            }
+            return self._rule_based_response(temperature, max_rain_chance)
 
         result.setdefault("agent", "weather_agent")
         result.setdefault("confidence", 0)
@@ -124,3 +112,41 @@ class WeatherAgent:
         temp_str = f"{temperature}C" if isinstance(temperature, (int, float)) else ""
         rain_str = f"{rain_chance}%" if isinstance(rain_chance, (int, float)) else ""
         return {"temperature": temp_str, "rain_chance": rain_str}
+
+    def _rule_based_response(
+        self,
+        temperature: float | None,
+        max_rain_chance: float | None,
+    ) -> dict:
+        if temperature is None and max_rain_chance is None:
+            return {
+                "agent": "weather_agent",
+                "confidence": 0,
+                "urgency": "low",
+                "urdu_message": "اس وقت موسم کا ڈیٹا دستیاب نہیں ہے۔ براہ کرم بعد میں کوشش کریں۔",
+                "extra": {"temperature": "", "rain_chance": ""},
+            }
+
+        if isinstance(max_rain_chance, (int, float)) and max_rain_chance >= 80:
+            message = "بارش کا امکان بہت زیادہ ہے، ابھی آبپاشی نہ کریں۔"
+            urgency = "high"
+        elif isinstance(max_rain_chance, (int, float)) and max_rain_chance >= 60:
+            message = "بارش کا امکان زیادہ ہے، آبپاشی روک دیں۔"
+            urgency = "medium"
+        elif isinstance(max_rain_chance, (int, float)) and max_rain_chance >= 40:
+            message = "بارش کا امکان ہے، پانی کم دیں۔"
+            urgency = "low"
+        elif isinstance(temperature, (int, float)) and temperature >= 36:
+            message = "گرمی زیادہ ہے، پانی صبح یا شام کو دیں۔"
+            urgency = "medium"
+        else:
+            message = "موسم ٹھیک ہے، معمول کے مطابق آبپاشی کریں۔"
+            urgency = "low"
+
+        return {
+            "agent": "weather_agent",
+            "confidence": 50,
+            "urgency": urgency,
+            "urdu_message": message,
+            "extra": self._format_extra(temperature, max_rain_chance),
+        }

@@ -60,6 +60,7 @@ class Orchestrator:
             tasks.append(self.fallback.respond(normalized))
 
         results = await asyncio.gather(*tasks)
+        results = self._apply_cross_agent_rules(results)
         response = format_urdu_message(results)
         if response:
             return response
@@ -125,3 +126,64 @@ class Orchestrator:
             if crop in message:
                 return crop
         return None
+
+    def _apply_cross_agent_rules(self, results: list[dict]) -> list[dict]:
+        disease_result = next(
+            (item for item in results if isinstance(item, dict) and item.get("agent") == "disease_agent"),
+            None,
+        )
+        weather_result = next(
+            (item for item in results if isinstance(item, dict) and item.get("agent") == "weather_agent"),
+            None,
+        )
+
+        if not disease_result or not weather_result:
+            return results
+
+        if not self._is_fungal_risk(disease_result):
+            return results
+
+        rain_chance = self._extract_rain_chance(weather_result)
+        if rain_chance is None or rain_chance < 40:
+            return results
+
+        warning = "⚠️ بارش کے ساتھ بیماری پھیل سکتی ہے، پانی روکیں اور کھیت میں ہوا داری بہتر کریں۔"
+        weather_message = (weather_result.get("urdu_message") or "").strip()
+        if warning not in weather_message:
+            weather_result["urdu_message"] = (weather_message + "\n\n" + warning).strip()
+        weather_result["urgency"] = "high"
+        return results
+
+    @staticmethod
+    def _extract_rain_chance(weather_result: dict) -> float | None:
+        extra = weather_result.get("extra") if isinstance(weather_result, dict) else None
+        raw = ""
+        if isinstance(extra, dict):
+            raw = extra.get("rain_chance", "") or ""
+        if not raw:
+            raw = weather_result.get("rain_chance", "") if isinstance(weather_result, dict) else ""
+
+        matches = re.findall(r"\d+(?:\.\d+)?", str(raw))
+        if not matches:
+            return None
+        try:
+            return float(matches[0])
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _is_fungal_risk(disease_result: dict) -> bool:
+        if not isinstance(disease_result, dict):
+            return False
+        confidence = disease_result.get("confidence")
+        if isinstance(confidence, (int, float)) and confidence < 40:
+            return False
+
+        disease_text = " ".join(
+            [
+                str(disease_result.get("disease", "")),
+                str(disease_result.get("urdu_message", "")),
+            ]
+        ).lower()
+        keywords = ["rust", "leaf rust", "curl", "fungal", "فنگس", "پھپھوند", "زنگ", "کرل", "پتہ موڑ"]
+        return any(keyword in disease_text for keyword in keywords)

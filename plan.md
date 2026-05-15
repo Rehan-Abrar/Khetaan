@@ -26,6 +26,16 @@ Khetaan is a multi-agent WhatsApp/voice assistant for Pakistani smallholder farm
 
 ---
 
+## Person B — AI & Logic (Status)
+
+- [x] Orchestrator routing implemented (router + normalization + multi-agent calls)
+- [x] Crop disease agent implemented with Gemini prompt + image handling
+- [x] Gemini prompts added for router, disease, weather, market, help, fallback, normalizer, formatter
+- [x] JSON parsing and fallback handling across agents
+- [x] Optional: expand cross-agent rules (e.g., disease + rain = fungal warning)
+
+---
+
 ## Repository structure
 
 ```
