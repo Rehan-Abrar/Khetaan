@@ -2,23 +2,64 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections import defaultdict
 
-from agents import (
-    CropAgent,
-    FallbackAgent,
-    HelpAgent,
-    MarketAgent,
-    RomanUrduNormalizer,
-    RouterAgent,
-    WeatherAgent,
-)
+from agents import CropAgent, FallbackAgent, HelpAgent, MarketAgent, RouterAgent, WeatherAgent
 from utils.urdu_formatter import format_urdu_message
+
+MAX_HISTORY = 10
+conversation_history: dict[str, list[dict[str, str]]] = defaultdict(list)
+
+CITY_COORDS = {
+    "lahore": (31.5204, 74.3587),
+    "faisalabad": (31.4187, 73.0791),
+    "multan": (30.1575, 71.5249),
+    "rawalpindi": (33.5651, 73.0169),
+    "gujranwala": (32.1877, 74.1945),
+    "sialkot": (32.4945, 74.5229),
+    "bahawalpur": (29.3956, 71.6836),
+    "sargodha": (32.0836, 72.6711),
+}
+
+ENGLISH_HINTS = {
+    "what",
+    "how",
+    "when",
+    "where",
+    "why",
+    "please",
+    "price",
+    "market",
+    "rate",
+    "sell",
+    "weather",
+    "irrigation",
+    "water",
+    "disease",
+    "crop",
+    "help",
+    "hello",
+}
+
+WEATHER_HINTS = {
+    "بارش",
+    "barish",
+    "baarish",
+    "pani",
+    "paani",
+    "aabpashi",
+    "aabpaashi",
+    "irrigation",
+    "rain",
+    "weather",
+    "mausam",
+    "mosam",
+}
 
 
 class Orchestrator:
     def __init__(self) -> None:
         self.router = RouterAgent()
-        self.normalizer = RomanUrduNormalizer()
         self.crop = CropAgent()
         self.weather = WeatherAgent()
         self.market = MarketAgent()
@@ -33,55 +74,94 @@ class Orchestrator:
         media_type: str | None = None,
     ) -> str:
         message = message or ""
+        history = self._append_history(sender, "user", message or "[media]")
+        language = self._detect_language(message)
         normalized = await self._normalize_message(message)
-        router_result = await self.router.route(normalized, image_present=bool(image_bytes))
+        router_result = await self.router.route(
+            normalized,
+            image_present=bool(image_bytes),
+            history=history,
+        )
         agent_names = router_result.get("agents", []) if isinstance(router_result, dict) else []
+
+        if self._looks_like_weather_question(message, normalized) and "weather_agent" not in agent_names:
+            agent_names.append("weather_agent")
 
         if isinstance(agent_names, list) and len(agent_names) > 1:
             agent_names = [name for name in agent_names if name != "help_agent"]
 
         tasks = []
         if "disease_agent" in agent_names:
-            tasks.append(self.crop.diagnose(normalized, image_bytes, media_type))
+            if image_bytes:
+                tasks.append(self.crop.diagnose(normalized, image_bytes, media_type, language))
+            else:
+                tasks.append(self.crop.diagnose_text(normalized, language))
 
         if "weather_agent" in agent_names:
-            lat_lon = self._extract_lat_lon(message) or self._extract_lat_lon(normalized)
+            lat_lon = self._resolve_location(message, normalized, history)
+            city_name = self._resolve_city(message, normalized, history)
             lat, lon = lat_lon if lat_lon else (None, None)
-            tasks.append(self.weather.advise(normalized, lat, lon))
+            tasks.append(self.weather.advise(normalized, lat, lon, city_name, language))
 
         if "market_agent" in agent_names:
             crop_filter = self._detect_crop_filter(normalized)
-            tasks.append(self.market.get_prices(crop_filter))
+            tasks.append(self.market.get_prices(crop_filter, language))
 
         if "help_agent" in agent_names:
-            tasks.append(self.help.respond())
+            tasks.append(self.help.respond(language))
 
         if not tasks:
-            tasks.append(self.fallback.respond(normalized))
+            tasks.append(self.fallback.respond(normalized, language))
 
         results = await asyncio.gather(*tasks)
-        results = self._apply_cross_agent_rules(results)
-        response = format_urdu_message(results)
+
+        disease_result = next(
+            (item for item in results if isinstance(item, dict) and item.get("agent") == "disease_agent"),
+            None,
+        )
+        weather_result = next(
+            (item for item in results if isinstance(item, dict) and item.get("agent") == "weather_agent"),
+            None,
+        )
+
+        if disease_result and not weather_result and self._is_fungal_risk(disease_result):
+            lat_lon = self._resolve_location(message, normalized, history)
+            city_name = self._resolve_city(message, normalized, history)
+            if lat_lon:
+                lat, lon = lat_lon
+                weather_result = await self.weather.advise(normalized, lat, lon, city_name, language)
+                results.append(weather_result)
+
+        results = self._apply_cross_agent_rules(results, language)
+        response = format_urdu_message(results, language=language)
         if response:
+            self._append_history(sender, "assistant", response)
             return response
 
-        fallback = await self.fallback.respond(normalized)
-        return format_urdu_message([fallback])
+        fallback = await self.fallback.respond(normalized, language)
+        response = format_urdu_message([fallback], language=language)
+        self._append_history(sender, "assistant", response)
+        return response
 
     async def _normalize_message(self, message: str) -> str:
-        if not message.strip():
-            return message
-        if self._contains_urdu(message):
-            return message
-
-        result = await self.normalizer.normalize(message)
-        if isinstance(result, dict) and result.get("urdu"):
-            return str(result["urdu"]).strip()
         return message
 
+    def _append_history(self, sender: str, role: str, content: str) -> list[dict[str, str]]:
+        history = conversation_history[sender]
+        if content:
+            history.append({"role": role, "content": content})
+        if len(history) > MAX_HISTORY:
+            history[:] = history[-MAX_HISTORY:]
+        return history
+
     @staticmethod
-    def _contains_urdu(message: str) -> bool:
-        return any("\u0600" <= char <= "\u06ff" for char in message)
+    def _detect_language(message: str) -> str:
+        if not message:
+            return "roman_urdu"
+        words = set(re.findall(r"[a-zA-Z']+", message.lower()))
+        if len(words & ENGLISH_HINTS) >= 2:
+            return "english"
+        return "roman_urdu"
 
     @staticmethod
     def _extract_lat_lon(message: str) -> tuple[float, float] | None:
@@ -101,6 +181,50 @@ class Orchestrator:
         return lat, lon
 
     @staticmethod
+    def _extract_city(message: str) -> str | None:
+        msg = message.lower()
+        for city in CITY_COORDS.keys():
+            if city in msg:
+                return city
+        return None
+
+    def _resolve_location(
+        self,
+        message: str,
+        normalized: str,
+        history: list[dict[str, str]],
+    ) -> tuple[float, float] | None:
+        lat_lon = self._extract_lat_lon(message) or self._extract_lat_lon(normalized)
+        if lat_lon:
+            return lat_lon
+
+        city = self._extract_city(message) or self._extract_city(normalized)
+        if not city:
+            for item in reversed(history):
+                city = self._extract_city(item.get("content", ""))
+                if city:
+                    break
+
+        return CITY_COORDS.get(city) if city else None
+
+    def _resolve_city(
+        self,
+        message: str,
+        normalized: str,
+        history: list[dict[str, str]],
+    ) -> str | None:
+        city = self._extract_city(message) or self._extract_city(normalized)
+        if not city:
+            for item in reversed(history):
+                city = self._extract_city(item.get("content", ""))
+                if city:
+                    break
+
+        if city:
+            return city.title()
+        return None
+
+    @staticmethod
     def _detect_crop_filter(message: str) -> str | None:
         crops = [
             "گندم",
@@ -113,6 +237,15 @@ class Orchestrator:
             "آلو",
             "ٹماٹر",
             "پیاز",
+            "gandum",
+            "chawal",
+            "kapas",
+            "makai",
+            "ganna",
+            "chanay",
+            "aloo",
+            "tamatar",
+            "piyaz",
             "cotton",
             "wheat",
             "rice",
@@ -127,7 +260,12 @@ class Orchestrator:
                 return crop
         return None
 
-    def _apply_cross_agent_rules(self, results: list[dict]) -> list[dict]:
+    @staticmethod
+    def _looks_like_weather_question(message: str, normalized: str) -> bool:
+        combined = f"{message} {normalized}".lower()
+        return any(keyword in combined for keyword in WEATHER_HINTS)
+
+    def _apply_cross_agent_rules(self, results: list[dict], language: str) -> list[dict]:
         disease_result = next(
             (item for item in results if isinstance(item, dict) and item.get("agent") == "disease_agent"),
             None,
@@ -147,7 +285,7 @@ class Orchestrator:
         if rain_chance is None or rain_chance < 40:
             return results
 
-        warning = "⚠️ بارش کے ساتھ بیماری پھیل سکتی ہے، پانی روکیں اور کھیت میں ہوا داری بہتر کریں۔"
+        warning = self._fungal_warning(language)
         weather_message = (weather_result.get("urdu_message") or "").strip()
         if warning not in weather_message:
             weather_result["urdu_message"] = (weather_message + "\n\n" + warning).strip()
@@ -185,5 +323,11 @@ class Orchestrator:
                 str(disease_result.get("urdu_message", "")),
             ]
         ).lower()
-        keywords = ["rust", "leaf rust", "curl", "fungal", "فنگس", "پھپھوند", "زنگ", "کرل", "پتہ موڑ"]
+        keywords = ["rust", "leaf rust", "curl", "fungal", "fungus", "zang", "curl", "patta mor"]
         return any(keyword in disease_text for keyword in keywords)
+
+    @staticmethod
+    def _fungal_warning(language: str) -> str:
+        if language == "english":
+            return "⚠️ With rain and disease, risk of spread is high. Stop irrigation and improve airflow."
+        return "⚠️ Barish ke sath bimari phail sakti hai, aabpashi rokein aur hawa dari behtar karein."

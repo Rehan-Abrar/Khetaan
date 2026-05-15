@@ -16,7 +16,7 @@ Khetaan is a multi-agent WhatsApp/voice assistant for Pakistani smallholder farm
 | Layer | Choice | Reason |
 |---|---|---|
 | Backend | Python FastAPI | Fast to build, async-friendly, team comfort |
-| WhatsApp | Twilio Sandbox | Free, no business verification, works tonight |
+| WhatsApp | Meta WhatsApp Cloud API | Free 1000 conversations/month, no rate-limit issues, real business number |
 | AI | Gemini 2.5 Flash (Google AI Studio) | Free tier, multimodal, strong Urdu |
 | Crop diagnosis | Gemini + local reference images (byte arrays) | No dataset needed, accurate, grounded |
 | Weather | Open-Meteo API | Free, no key, accurate for Pakistan |
@@ -40,7 +40,7 @@ Khetaan is a multi-agent WhatsApp/voice assistant for Pakistani smallholder farm
 
 ```
 khetaan/
-├── main.py                        # FastAPI app + Twilio webhook
+├── main.py                        # FastAPI app + Meta WhatsApp Cloud API webhook
 ├── orchestrator.py                # Master intent router
 ├── agents/
 │   ├── crop_agent.py              # Gemini multimodal diagnosis
@@ -61,7 +61,7 @@ khetaan/
 │   └── punjab_mandi.py            # HTML scraper for Punjab Mandi prices
 ├── utils/
 │   ├── urdu_formatter.py          # Format responses in clean Urdu
-│   ├── twilio_helper.py           # Send WhatsApp replies
+│   ├── whatsapp_helper.py         # Send WhatsApp replies via Meta Cloud API
 │   └── image_loader.py            # Load reference images as byte arrays
 ├── data/
 │   └── mandi_cache.json           # Fallback price cache (updated daily)
@@ -77,9 +77,10 @@ khetaan/
 
 ```env
 GEMINI_API_KEY=your_google_ai_studio_key
-TWILIO_ACCOUNT_SID=your_twilio_sid
-TWILIO_AUTH_TOKEN=your_twilio_auth_token
-TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
+WHATSAPP_ACCESS_TOKEN=your_meta_temporary_or_system_user_token
+WHATSAPP_PHONE_NUMBER_ID=1166397516548721
+WHATSAPP_VERIFY_TOKEN=khetaan_verify_123
+WHATSAPP_WABA_ID=26573540592338383
 PORT=8000
 ```
 
@@ -97,7 +98,6 @@ PORT=8000
 ```
 fastapi
 uvicorn
-twilio
 google-generativeai
 httpx
 python-dotenv
@@ -114,85 +114,61 @@ Pillow
 
 ---
 
-## Phase 2 — Twilio WhatsApp webhook
+## Phase 2 — Meta WhatsApp Cloud API webhook
 **Time estimate: 1 hour**
 **Owner: 1 person**
 
 ### Setup steps
 
-1. Create a Twilio account at twilio.com (free)
-2. Go to Messaging → Try it out → Send a WhatsApp message
-3. Note the sandbox number: `+1 415 523 8886`
-4. Join the sandbox by sending "join [your-sandbox-word]" from your phone
-5. Set webhook URL to: `https://your-render-url.onrender.com/webhook`
-   (use ngrok locally during dev: `ngrok http 8000`)
+1. Go to [developers.facebook.com](https://developers.facebook.com) → your app → WhatsApp → API Setup
+2. Note your **Phone Number ID** (`1166397516548721`) and **WABA ID** (`26573540592338383`)
+3. Generate a temporary access token from the dashboard (valid 24 hours; good enough for the demo)
+4. Add your personal WhatsApp number as a recipient in the "To" dropdown
+5. Send a test message from the dashboard to confirm the number works
+6. Run ngrok locally: `ngrok http 8000`
+7. In the app dashboard → WhatsApp → Configuration → Webhook:
+   - Webhook URL: `https://your-ngrok-url.ngrok.io/webhook`
+   - Verify Token: `khetaan_verify_123`
+   - Subscribe to field: `messages`
+8. For production: copy your Render URL as the webhook URL instead of ngrok
 
 ### Webhook handler (`main.py`)
 
 ```python
-import os
-
-import httpx
-from fastapi import FastAPI, Form
-from fastapi.responses import Response
-from twilio.twiml.messaging_response import MessagingResponse
+from fastapi import FastAPI, Request, Response
+import httpx, os
 from orchestrator import Orchestrator
-import google.generativeai as genai
 
 app = FastAPI()
 orchestrator = Orchestrator()
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "khetaan_verify_123")
+PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+META_API_URL = f"https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages"
 
-async def transcribe_audio(audio_url: str) -> str:
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            audio_url,
-            auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-        )
-        audio_bytes = resp.content
-
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    response = model.generate_content([
-        "Transcribe this voice message. Return only the transcribed text, no explanation.",
-        {"mime_type": "audio/ogg", "data": audio_bytes}
-    ])
-    return response.text.strip()
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "project": "Khetaan"}
+# Meta calls GET /webhook once to verify your server
+@app.get("/webhook")
+async def verify_webhook(request: Request):
+    params = dict(request.query_params)
+    if (params.get("hub.mode") == "subscribe" and
+            params.get("hub.verify_token") == VERIFY_TOKEN):
+        return Response(content=params["hub.challenge"])
+    return Response(status_code=403)
 
 @app.post("/webhook")
-async def webhook(
-    Body: str = Form(default=""),
-    MediaUrl0: str = Form(default=None),
-    MediaContentType0: str = Form(default=None),
-    From: str = Form(default=""),
-):
-    message_text = Body
-    image_bytes = None
-
-    if MediaUrl0 and MediaContentType0:
-        if "audio" in MediaContentType0:
-            message_text = await transcribe_audio(MediaUrl0)
-        elif "image" in MediaContentType0:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    MediaUrl0,
-                    auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-                )
-                image_bytes = resp.content
-
-    reply = await orchestrator.route(
-        message=message_text,
-        image_bytes=image_bytes,
-        sender=From
-    )
-
-    resp = MessagingResponse()
-    resp.message(reply)
-    return Response(content=str(resp), media_type="application/xml")
+async def receive_message(request: Request):
+    body = await request.json()
+    try:
+        entry = body["entry"][0]["changes"][0]["value"]
+        if "messages" not in entry:
+            return {"status": "ok"}
+        msg = entry["messages"][0]
+        sender = msg["from"]
+        # ... handle text / image / audio types, call orchestrator, send reply
+    except Exception as e:
+        print(f"Webhook error: {e}")
+    return {"status": "ok"}  # always 200 to Meta
 ```
 
 ### Deliverable
@@ -689,21 +665,23 @@ services:
     envVars:
       - key: GEMINI_API_KEY
         sync: false
-      - key: TWILIO_ACCOUNT_SID
+      - key: WHATSAPP_ACCESS_TOKEN
         sync: false
-      - key: TWILIO_AUTH_TOKEN
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        value: "1166397516548721"
+      - key: WHATSAPP_VERIFY_TOKEN
         sync: false
-      - key: TWILIO_WHATSAPP_NUMBER
-        value: "whatsapp:+14155238886"
+      - key: WHATSAPP_WABA_ID
+        value: "26573540592338383"
 ```
 
 ### Steps
 
 1. Push repo to GitHub
 2. Go to render.com → New Web Service → connect repo
-3. Add env vars in Render dashboard
+3. Add env vars in Render dashboard (GEMINI_API_KEY, WHATSAPP_ACCESS_TOKEN, WHATSAPP_VERIFY_TOKEN)
 4. Deploy — first deploy takes ~3 minutes
-5. Copy the Render URL → paste into Twilio sandbox webhook field
+5. Copy the Render URL → paste into Meta app dashboard → WhatsApp → Configuration → Webhook URL: `https://your-render-url.onrender.com/webhook`
 6. Send a test message from WhatsApp — confirm it works end to end
 
 ### Important: Render free tier sleep
@@ -716,7 +694,7 @@ Render spins down after 15 minutes of inactivity. For the demo, send a message 2
 | Phase | Task | Time | Who |
 |---|---|---|---|
 | 1 | Scaffolding | 30 min | Person A |
-| 2 | Twilio webhook | 45 min | Person A |
+| 2 | Meta WhatsApp Cloud API webhook | 45 min | Person A |
 | 3 | Orchestrator | 1 hr | Person B |
 | 4a | Reference image collection | 1 hr | Person C |
 | 4b | Crop agent code | 1 hr | Person B |
@@ -734,9 +712,10 @@ Start: tonight. Target: system live by 3am. Demo prep: 8am–9am.
 ## Demo script (for judges at booth)
 
 **What to have ready:**
-- Phone with WhatsApp joined to Twilio sandbox
+- Phone with WhatsApp (the number you registered as recipient in Meta dashboard)
 - 3 test photos saved in camera roll: (1) wheat leaf rust, (2) healthy crop, (3) cotton with CLCuV
 - Render URL live and warmed up
+- Fresh access token generated on the morning of the demo (tokens expire in 24 hours)
 
 **The 90-second demo:**
 
@@ -771,7 +750,8 @@ Start: tonight. Target: system live by 3am. Demo prep: 8am–9am.
 | Render sleeps during demo | Wake it up 2 min before. Keep phone warm with periodic messages. |
 | Scraper fails on AMIS site | Fallback JSON hardcoded with realistic prices. Judges don't know the difference. |
 | Gemini returns non-JSON | `try/except` in crop agent returns graceful Urdu fallback. |
-| Twilio sandbox expired | Rejoin sandbox before the event. Takes 30 seconds. |
+| Meta access token expired | Generate a fresh token on demo morning. Takes 30 seconds on the dashboard. |
+| Webhook not verified | Ensure Render is deployed before saving webhook URL in Meta dashboard. |
 | Blurry demo photos | Have 3 pre-selected clear photos saved in camera roll. Do not rely on taking live photos. |
 | Network issues at venue | Test on mobile data, not venue WiFi. Render is on the internet, not local. |
 
@@ -782,7 +762,6 @@ Start: tonight. Target: system live by 3am. Demo prep: 8am–9am.
 ```
 fastapi==0.111.0
 uvicorn==0.30.1
-twilio==9.2.3
 google-generativeai==0.7.2
 httpx==0.27.0
 python-dotenv==1.0.1

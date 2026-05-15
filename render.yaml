@@ -7,9 +7,13 @@ services:
     envVars:
       - key: GEMINI_API_KEY
         sync: false
-      - key: TWILIO_ACCOUNT_SID
+      - key: WHATSAPP_ACCESS_TOKEN
         sync: false
-      - key: TWILIO_AUTH_TOKEN
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        value: "1166397516548721"
+      - key: WHATSAPP_VERIFY_TOKEN
         sync: false
-      - key: TWILIO_WHATSAPP_NUMBER
-        value: "whatsapp:+14155238886"
+      - key: WHATSAPP_WABA_ID
+        value: "26573540592338383"
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: "v25.0"

@@ -10,15 +10,24 @@ URGENCY_ALIASES = {
     "کم": "low",
 }
 SECTION_TITLES = {
-    "disease_agent": "🌿 بیماری",
-    "weather_agent": "🌦 موسم",
-    "market_agent": "💰 منڈی ریٹ",
-    "help_agent": "ℹ️ مدد",
-    "fallback_agent": "ℹ️ رہنمائی",
+    "roman_urdu": {
+        "disease_agent": "🌿 Bimari",
+        "weather_agent": "🌦 Mausam",
+        "market_agent": "💰 Mandi rate",
+        "help_agent": "ℹ️ Madad",
+        "fallback_agent": "ℹ️ Rehnumai",
+    },
+    "english": {
+        "disease_agent": "🌿 Disease",
+        "weather_agent": "🌦 Weather",
+        "market_agent": "💰 Mandi rates",
+        "help_agent": "ℹ️ Help",
+        "fallback_agent": "ℹ️ Guidance",
+    },
 }
 
 
-def format_urdu_message(message_or_sections: Any) -> str:
+def format_urdu_message(message_or_sections: Any, language: str = "roman_urdu") -> str:
     if isinstance(message_or_sections, str):
         return message_or_sections
 
@@ -36,7 +45,7 @@ def format_urdu_message(message_or_sections: Any) -> str:
         agent = section.get("agent", "")
         urgency = section.get("urgency", "low")
         urgency = URGENCY_ALIASES.get(urgency, urgency)
-        title = SECTION_TITLES.get(agent, "")
+        title = SECTION_TITLES.get(language, SECTION_TITLES["roman_urdu"]).get(agent, "")
         entries.append({"title": title, "message": message, "urgency": urgency})
 
     if not entries:

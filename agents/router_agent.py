@@ -7,9 +7,43 @@ from agents.prompts import ROUTER_PROMPT
 from utils.gemini_client import GeminiClient
 
 ALLOWED_AGENTS = {"disease_agent", "weather_agent", "market_agent", "help_agent"}
-WEATHER_KEYWORDS = ("پانی", "بارش", "موسم", "weather", "pani")
-MARKET_KEYWORDS = ("قیمت", "ریٹ", "منڈی", "rate", "price")
-HELP_KEYWORDS = ("hello", "hi", "اسلام", "السلام", "help", "مدد")
+DISEASE_KEYWORDS = (
+    "بیماری",
+    "bimari",
+    "bemari",
+    "disease",
+    "spots",
+    "spot",
+    "daag",
+    "curl",
+    "murjha",
+    "murjhana",
+    "phaphund",
+    "fungal",
+    "fungus",
+    "زنگ",
+    "کرل",
+    "پتہ",
+    "پتے",
+    "patta",
+    "patte",
+    "leaf",
+)
+WEATHER_KEYWORDS = (
+    "پانی",
+    "بارش",
+    "موسم",
+    "weather",
+    "pani",
+    "aabpashi",
+    "aabpaashi",
+    "irrigation",
+    "rain",
+    "barish",
+    "baarish",
+)
+MARKET_KEYWORDS = ("قیمت", "ریٹ", "منڈی", "rate", "price", "mandi", "market")
+HELP_KEYWORDS = ("hello", "hi", "اسلام", "السلام", "help", "مدد", "salaam", "salam")
 
 
 class RouterAgent:
@@ -19,15 +53,30 @@ class RouterAgent:
         except RuntimeError:
             self.client = None
 
-    async def route(self, message: str, image_present: bool) -> dict[str, Any]:
+    async def route(
+        self,
+        message: str,
+        image_present: bool,
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         message = message or ""
         if not self.client:
             return self._fallback_route(message, image_present)
+
+        history_lines = []
+        if history:
+            for item in history[-6:]:
+                role = item.get("role", "")
+                content = item.get("content", "")
+                if content:
+                    history_lines.append(f"{role.upper()}: {content}")
+        history_text = "\n".join(history_lines)
 
         parts = [
             ROUTER_PROMPT,
             f"Message: {message}",
             f"Image present: {'yes' if image_present else 'no'}",
+            f"Recent conversation:\n{history_text}" if history_text else "",
             "Return JSON only without code fences.",
         ]
         result = await asyncio.to_thread(self.client.generate_json, parts)
@@ -60,6 +109,9 @@ class RouterAgent:
         agents: list[str] = []
 
         if image_present:
+            agents.append("disease_agent")
+
+        if any(keyword in msg_lower or keyword in message for keyword in DISEASE_KEYWORDS):
             agents.append("disease_agent")
 
         if any(keyword in msg_lower or keyword in message for keyword in WEATHER_KEYWORDS):
