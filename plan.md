@@ -115,7 +115,7 @@ Pillow
 ---
 
 ## Phase 2 — Twilio WhatsApp webhook
-**Time estimate: 45 minutes**
+**Time estimate: 1 hour**
 **Owner: 1 person**
 
 ### Setup steps
@@ -130,13 +130,34 @@ Pillow
 ### Webhook handler (`main.py`)
 
 ```python
-from fastapi import FastAPI, Request, Form
+import os
+
+import httpx
+from fastapi import FastAPI, Form
+from fastapi.responses import Response
 from twilio.twiml.messaging_response import MessagingResponse
 from orchestrator import Orchestrator
-import httpx
+import google.generativeai as genai
 
 app = FastAPI()
 orchestrator = Orchestrator()
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+async def transcribe_audio(audio_url: str) -> str:
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            audio_url,
+            auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+        )
+        audio_bytes = resp.content
+
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    response = model.generate_content([
+        "Transcribe this voice message. Return only the transcribed text, no explanation.",
+        {"mime_type": "audio/ogg", "data": audio_bytes}
+    ])
+    return response.text.strip()
 
 @app.get("/health")
 async def health():
@@ -148,16 +169,23 @@ async def webhook(
     MediaUrl0: str = Form(default=None),
     MediaContentType0: str = Form(default=None),
     From: str = Form(default=""),
-    To: str = Form(default="")
 ):
+    message_text = Body
     image_bytes = None
-    if MediaUrl0:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(MediaUrl0, auth=(TWILIO_SID, TWILIO_TOKEN))
-            image_bytes = resp.content
+
+    if MediaUrl0 and MediaContentType0:
+        if "audio" in MediaContentType0:
+            message_text = await transcribe_audio(MediaUrl0)
+        elif "image" in MediaContentType0:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    MediaUrl0,
+                    auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+                )
+                image_bytes = resp.content
 
     reply = await orchestrator.route(
-        message=Body,
+        message=message_text,
         image_bytes=image_bytes,
         sender=From
     )
@@ -168,41 +196,76 @@ async def webhook(
 ```
 
 ### Deliverable
-Send "hello" from WhatsApp → receive "Assalam o Alaikum! Main Khetaan hoon." back.
+Send "hello" from WhatsApp → receive the fallback Urdu greeting back.
+Send a voice note in Roman Urdu or Punjabi → receive a transcribed-text reply path.
 
 ---
 
 ## Phase 3 — Master orchestrator
-**Time estimate: 1 hour**
+**Time estimate: 1.5 hours**
 **Owner: 1 person**
 
 ### Intent detection logic
 
-The orchestrator takes the incoming message + optional image and routes to the correct agent(s). It does NOT use a separate LLM call for routing — it uses keyword + image-presence logic to keep latency low.
+The orchestrator takes the incoming message + optional image and routes to the correct agent(s). It uses one Gemini routing call to classify intent, because Roman Urdu, Urdu, English, and mixed farmer speech all need to work without hand-built keyword lists.
 
 ```python
 # orchestrator.py
+
+import json
+import google.generativeai as genai
 
 from agents.crop_agent import CropAgent
 from agents.weather_agent import WeatherAgent
 from agents.market_agent import MarketAgent
 
+INTENT_PROMPT = """
+You are a routing assistant for Khetaan, a farming helpline in Pakistan.
+Classify the farmer's message into one or more intents.
+
+Intents:
+- crop_disease: farmer describing symptoms, asking about disease, sending crop photo
+- weather_irrigation: asking about watering, rain, when to irrigate
+- market_price: asking about mandi rates, selling price, where to sell
+- general_help: greeting, confusion, anything else
+
+Message: "{text}"
+Image present: {has_image}
+
+Rules:
+- If image is present, always include crop_disease
+- A message can have multiple intents
+- Roman Urdu, Urdu, English — all valid
+
+Return ONLY this JSON:
+{{"intents": ["crop_disease"], "confidence": "high"}}
+"""
+
 class Orchestrator:
     def __init__(self):
+        self.model = genai.GenerativeModel("gemini-2.5-flash")
         self.crop = CropAgent()
         self.weather = WeatherAgent()
         self.market = MarketAgent()
 
+    async def detect_intent(self, message: str, has_image: bool) -> list[str]:
+        try:
+            prompt = INTENT_PROMPT.format(text=message, has_image=has_image)
+            response = self.model.generate_content(prompt)
+            raw = response.text.strip().replace("```json", "").replace("```", "")
+            result = json.loads(raw)
+            return result.get("intents", ["general_help"])
+        except:
+            return ["crop_disease"] if has_image else ["general_help"]
+
     async def route(self, message: str, image_bytes: bytes | None, sender: str) -> str:
-        msg = message.lower()
+        intents = await self.detect_intent(message, has_image=bool(image_bytes))
         results = []
 
-        # Rule 1: Image present → always run crop diagnosis
-        if image_bytes:
+        if "crop_disease" in intents and image_bytes:
             crop_result = await self.crop.diagnose(image_bytes)
             results.append(crop_result)
 
-            # Cross-agent: if disease found, also check weather
             if crop_result.get("disease_detected"):
                 weather_result = await self.weather.advise(
                     lat=31.5204,  # Default: Lahore
@@ -211,26 +274,21 @@ class Orchestrator:
                 )
                 results.append(weather_result)
 
-        # Rule 2: Irrigation / water / weather keywords
-        irrigation_keywords = ["پانی", "بارش", "موسم", "آبپاشی", "water", "rain", "weather", "irrigation"]
-        if any(kw in msg for kw in irrigation_keywords):
+        if "weather_irrigation" in intents:
             weather_result = await self.weather.advise(lat=31.5204, lon=74.3587)
             results.append(weather_result)
 
-        # Rule 3: Price / mandi / market keywords
-        market_keywords = ["قیمت", "منڈی", "بیچنا", "rate", "mandi", "price", "market", "sell"]
-        if any(kw in msg for kw in market_keywords):
+        if "market_price" in intents:
             market_result = await self.market.get_prices()
             results.append(market_result)
 
-        # Rule 4: Nothing matched → help message
         if not results:
             return (
-                "السلام علیکم! میں Khetaan ہوں۔\n\n"
-                "آپ مجھ سے یہ پوچھ سکتے ہیں:\n"
-                "🌿 فصل کی بیماری — فوٹو بھیجیں\n"
-                "🌦 پانی/آبپاشی — 'پانی' لکھیں\n"
-                "💰 منڈی ریٹ — 'قیمت' لکھیں"
+                "Assalam o Alaikum! Main Khetaan hoon 🌾\n\n"
+                "Aap mujhse yeh pooch sakte hain:\n"
+                "📸 Fasal ki bimari — photo bhejein\n"
+                "🌦 Paani/irrigation — poochein\n"
+                "💰 Mandi rate — poochein"
             )
 
         return self._format_combined(results)
@@ -240,7 +298,8 @@ class Orchestrator:
 ```
 
 ### Deliverable
-Routing logic correctly dispatches to agents based on message content and image presence.
+Routing logic correctly dispatches to agents based on Gemini intent classification.
+Roman Urdu, Urdu, mixed English, and voice-note transcripts all follow the same routing path.
 
 ---
 
