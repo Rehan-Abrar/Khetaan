@@ -31,7 +31,7 @@ class CropAgent:
             DISEASE_AGENT_PROMPT,
             f"Farmer message: {message or ''}",
             self._language_instruction(language),
-            {"mime_type": mime, "data": image_bytes},
+            {"mime_type": "image/jpeg", "data": self._compress_image(image_bytes)},
             "Return JSON only without code fences.",
         ]
         result = await asyncio.to_thread(self.client.generate_json, parts)
@@ -76,26 +76,32 @@ class CropAgent:
         return result
 
     @staticmethod
+    def _compress_image(image_bytes: bytes, max_size_kb: int = 150) -> bytes:
+        from PIL import Image
+        import io
+        if len(image_bytes) <= max_size_kb * 1024:
+            return image_bytes
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img.thumbnail((600, 600), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=60)
+        return buf.getvalue()
+
+    @staticmethod
     def _looks_unclear(result: dict) -> bool:
         confidence = result.get("confidence", 0)
         disease = str(result.get("disease", "")).strip().lower()
-        message = str(result.get("urdu_message", "")).strip().lower()
 
-        if isinstance(confidence, (int, float)) and confidence < 35:
-            return True
-
-        unclear_markers = [
-            "clear photo",
-            "clearer image",
-            "tasveer clear nahi",
-            "dubara clear photo",
-            "photo bhejein",
-            "image unclear",
-        ]
-        if any(marker in message for marker in unclear_markers):
-            return True
-
+        # Only reject if genuinely no disease identified
         if not disease:
+            return True
+
+        # Only reject very low confidence
+        if isinstance(confidence, (int, float)) and confidence < 20:
+            return True
+
+        # Only reject if disease field itself says unclear
+        if disease in ("unclear", "unknown", ""):
             return True
 
         return False
