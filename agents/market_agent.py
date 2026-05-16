@@ -26,7 +26,7 @@ class MarketAgent:
         
         # Apply filters
         if crop_filter:
-            prices = [p for p in prices if crop_filter.lower() in p.get("crop", "").lower()]
+            prices = [p for p in prices if crop_filter.lower() in p.get("commodity", "").lower()]
         if city_filter:
             prices = [p for p in prices if city_filter.lower() in p.get("city", "").lower()]
 
