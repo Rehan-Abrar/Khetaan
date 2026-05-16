@@ -116,7 +116,7 @@ def _parse_price_table(html: str) -> list[dict[str, Any]]:
             max_price = max(city_prices.values())
             
             prices.append({
-                "commodity": crop,
+                "crop": crop,
                 "city": "Lahore",  # Default to first city
                 "min_price": str(min_price),
                 "max_price": str(max_price),
