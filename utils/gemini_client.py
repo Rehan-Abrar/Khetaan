@@ -77,7 +77,7 @@ class GeminiClient:
         self,
         parts: list[Any],
         temperature: float = 0.2,
-        max_output_tokens: int = 2048,
+        max_output_tokens: int = 4096,
     ) -> dict[str, Any] | None:
         # Build content parts for the new SDK
         content_parts: list[Any] = []
@@ -97,7 +97,8 @@ class GeminiClient:
         self._key_index = 0
         while True:
             try:
-                # Create a fresh client per call — genai.Client is not thread-safe when reused
+                # Instantiate a fresh client per call (not as context manager —
+                # using `with` closes the HTTP pool and blocks subsequent calls)
                 client = genai.Client(api_key=self.api_keys[self._key_index])
                 response = client.models.generate_content(
                     model=self.model_name,
