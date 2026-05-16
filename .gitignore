@@ -40,7 +40,6 @@ build/
 # Project specific
 *.log
 *.exe
-data/*.json
 test-webhook.json
 project-log.md
 
