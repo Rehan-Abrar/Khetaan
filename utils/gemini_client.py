@@ -9,8 +9,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-FALLBACK_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -46,12 +45,6 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
 def _get_api_keys() -> list[str]:
     """Get all available API keys from environment."""
     keys = []
-    # TEMPORARY: Only use GEMINI_API_KEY3 for testing
-    key3 = os.getenv("GEMINI_API_KEY3", "").strip()
-    if key3:
-        keys.append(key3)
-        return keys
-    
     # Primary key
     primary = os.getenv("GEMINI_API_KEY", "").strip()
     if primary:
@@ -103,61 +96,79 @@ class GeminiClient:
             else:
                 contents.append(str(part))
 
-        # Try primary model, fall back to gemini-2.0-flash on 503 overload
+        # Try only the configured model
         models_to_try = [self.model_name]
-        if self.model_name != FALLBACK_MODEL:
-            models_to_try.append(FALLBACK_MODEL)
 
         response = None
+        max_overload_retries = 3
+        base_delay_seconds = 0.8
         for model in models_to_try:
             # Try all API keys for this model
             keys_tried = 0
             while keys_tried < len(self.api_keys):
-                try:
-                    response = self.client.models.generate_content(
-                        model=model,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            temperature=temperature,
-                            max_output_tokens=max_output_tokens,
-                        ),
-                    )
-                    break  # success — stop trying
-                except Exception as exc:
-                    exc_name = type(exc).__name__
-                    exc_str = str(exc)
-                    
-                    # Check if it's a rate limit / quota error
-                    is_rate_limit = (
-                        "429" in exc_str
-                        or "RESOURCE_EXHAUSTED" in exc_str
-                        or "quota" in exc_str.lower()
-                    )
-                    
-                    # Only log first 200 chars of error to avoid spam
-                    error_preview = exc_str[:200] if len(exc_str) > 200 else exc_str
-                    print(
-                        f"[GeminiClient] {model} (key #{self.current_key_index + 1}) error: {exc_name}: {error_preview}",
-                        file=sys.stderr,
-                    )
-                    
-                    # If rate limited, try rotating to next key
-                    if is_rate_limit:
-                        if self._rotate_key():
-                            keys_tried += 1
-                            time.sleep(0.5)  # Brief delay before retry
-                            continue  # retry with new key
-                        else:
-                            # No more keys to try
+                overload_attempts = 0
+                while True:
+                    try:
+                        response = self.client.models.generate_content(
+                            model=model,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                temperature=temperature,
+                                max_output_tokens=max_output_tokens,
+                            ),
+                        )
+                        break  # success — stop trying
+                    except Exception as exc:
+                        exc_name = type(exc).__name__
+                        exc_str = str(exc)
+                        exc_lower = exc_str.lower()
+
+                        is_rate_limit = (
+                            "429" in exc_str
+                            or "resource_exhausted" in exc_lower
+                            or "quota" in exc_lower
+                        )
+                        is_overloaded = ("503" in exc_str or "unavailable" in exc_lower)
+
+                        if is_overloaded and overload_attempts < max_overload_retries:
+                            overload_attempts += 1
+                            delay = base_delay_seconds * (2 ** (overload_attempts - 1))
+                            time.sleep(delay)
+                            continue
+
+                        if is_rate_limit:
+                            if self._rotate_key():
+                                keys_tried += 1
+                                time.sleep(0.5)
+                                break
+
+                            error_preview = exc_str[:200] if len(exc_str) > 200 else exc_str
+                            print(
+                                f"[GeminiClient] {model} rate limit after all keys: {exc_name}: {error_preview}",
+                                file=sys.stderr,
+                            )
+                            keys_tried = len(self.api_keys)
                             break
-                    else:
-                        # Non-rate-limit error, don't rotate key, just try next model
+
+                        if is_overloaded:
+                            print(
+                                f"[GeminiClient] {model} overloaded after retries.",
+                                file=sys.stderr,
+                            )
+                        else:
+                            error_preview = exc_str[:200] if len(exc_str) > 200 else exc_str
+                            print(
+                                f"[GeminiClient] {model} error: {exc_name}: {error_preview}",
+                                file=sys.stderr,
+                            )
+                        keys_tried = len(self.api_keys)
                         break
-                
-                keys_tried += 1
-            
+
+                if response is not None:
+                    break
+
             if response is not None:
-                break  # Got a successful response
+                break
 
         if response is None:
             return None

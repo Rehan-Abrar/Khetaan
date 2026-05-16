@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from agents.prompts import DISEASE_AGENT_PROMPT, DISEASE_TEXT_PROMPT
 from utils.gemini_client import GeminiClient
@@ -12,6 +13,7 @@ class CropAgent:
             self.client = GeminiClient(model_name=model_name)
         except RuntimeError:
             self.client = None
+        self.reference_images = self._load_reference_images()
 
     async def diagnose(
         self,
@@ -27,13 +29,26 @@ class CropAgent:
             return self._build_not_available_response(language)
 
         mime = mime_type or "image/jpeg"
+        compressed_bytes, compressed_mime = self._compress_image(image_bytes, mime)
         parts = [
             DISEASE_AGENT_PROMPT,
             f"Farmer message: {message or ''}",
             self._language_instruction(language),
-            {"mime_type": "image/jpeg", "data": self._compress_image(image_bytes)},
-            "Return JSON only without code fences.",
         ]
+
+        if self.reference_images:
+            parts.append("Reference images (known examples):")
+            for index, ref in enumerate(self.reference_images, start=1):
+                parts.append(f"Reference image {index} - {ref['label']} ({ref['filename']})")
+                parts.append({"mime_type": ref["mime_type"], "data": ref["data"]})
+
+        parts.extend(
+            [
+                "Farmer crop photo to diagnose:",
+                {"mime_type": compressed_mime, "data": compressed_bytes},
+                "Return JSON only without code fences.",
+            ]
+        )
         result = await asyncio.to_thread(self.client.generate_json, parts)
         if not isinstance(result, dict):
             return self._build_unclear_response(language)
@@ -76,16 +91,64 @@ class CropAgent:
         return result
 
     @staticmethod
-    def _compress_image(image_bytes: bytes, max_size_kb: int = 150) -> bytes:
+    def _compress_image(
+        image_bytes: bytes,
+        mime_type: str,
+        max_size_kb: int = 150,
+    ) -> tuple[bytes, str]:
         from PIL import Image
         import io
         if len(image_bytes) <= max_size_kb * 1024:
-            return image_bytes
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        img.thumbnail((600, 600), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=60)
-        return buf.getvalue()
+            return image_bytes, mime_type
+        try:
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            img.thumbnail((600, 600), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=60)
+            return buf.getvalue(), "image/jpeg"
+        except Exception:
+            return image_bytes, mime_type
+
+    @staticmethod
+    def _guess_mime_type(path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix == ".png":
+            return "image/png"
+        return "image/jpeg"
+
+    def _label_reference(self, filename: str) -> str:
+        lower = filename.lower()
+        if "wheat" in lower and "rust" in lower:
+            return "Wheat Leaf Rust"
+        if "cotton" in lower and "curl" in lower:
+            return "Cotton Leaf Curl Virus"
+        if "aphid" in lower:
+            return "Aphids"
+        return "Reference"
+
+    def _load_reference_images(self) -> list[dict[str, str | bytes]]:
+        root = Path(__file__).resolve().parent.parent
+        ref_dir = root / "reference_images"
+        if not ref_dir.exists():
+            return []
+
+        images: list[dict[str, str | bytes]] = []
+        for path in sorted(ref_dir.glob("*.jpg")) + sorted(ref_dir.glob("*.jpeg")) + sorted(ref_dir.glob("*.png")):
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            mime = self._guess_mime_type(path)
+            compressed, compressed_mime = self._compress_image(raw, mime)
+            images.append(
+                {
+                    "filename": path.name,
+                    "label": self._label_reference(path.name),
+                    "mime_type": compressed_mime,
+                    "data": compressed,
+                }
+            )
+        return images
 
     @staticmethod
     def _looks_unclear(result: dict) -> bool:

@@ -29,9 +29,9 @@ async def main() -> None:
     agent = CropAgent()
 
     samples: list[tuple[str, Path]] = [
-        ("wheat rust", Path("reference_images/wheat_leaf_rust_1.jpg")),
-        ("cotton leaf curl", Path("reference_images/cotton_leaf_curl_1.jpg")),
-        ("aphids", Path("reference_images/aphids_1.jpg")),
+        ("wheat rust", ROOT / "reference_images" / "wheat_leaf_rust_1.jpg"),
+        ("cotton leaf curl", ROOT / "reference_images" / "cotton_leaf_curl_1.jpg"),
+        ("aphids", ROOT / "reference_images" / "aphids_1.jpg"),
     ]
 
     healthy = Image.new("RGB", (900, 900), "#67b65a")
@@ -44,7 +44,7 @@ async def main() -> None:
     healthy_path = _save_temp_image(healthy)
     samples.append(("healthy", healthy_path))
 
-    blurred_source = Image.open("reference_images/wheat_leaf_rust_1.jpg").convert("RGB")
+    blurred_source = Image.open(ROOT / "reference_images" / "wheat_leaf_rust_1.jpg").convert("RGB")
     blurred = blurred_source.filter(ImageFilter.GaussianBlur(radius=18))
     blur_path = _save_temp_image(blurred)
     samples.append(("blurred", blur_path))
@@ -52,7 +52,7 @@ async def main() -> None:
     try:
         for label, path in samples:
             result = await agent.diagnose("test", path.read_bytes(), "image/jpeg", "roman_urdu")
-            print(f"{label}: {result['disease']} | {result['confidence']} | {result['urgency']}")
+            print(f"{label} ({path.name}): {result['disease']} | {result['confidence']} | {result['urgency']}")
             print(result["urdu_message"].splitlines()[0])
             print("---")
     finally:

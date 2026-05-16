@@ -1,12 +1,15 @@
 from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
 import google.generativeai as genai
 import os
 
+ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
+
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel("gemini-2.5-flash")
-img = Path("reference_images/wheat_leaf_rust_1.jpg").read_bytes()
+model_name = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+model = genai.GenerativeModel(model_name)
+img = (ROOT / "reference_images" / "wheat_leaf_rust_1.jpg").read_bytes()
 
 prompt = (
     "You are an expert agronomist. Look at this crop photo carefully. "
