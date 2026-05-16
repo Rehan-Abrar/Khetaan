@@ -152,21 +152,11 @@ class CropAgent:
 
     @staticmethod
     def _looks_unclear(result: dict) -> bool:
-        confidence = result.get("confidence", 0)
         disease = str(result.get("disease", "")).strip().lower()
-
-        # Only reject if genuinely no disease identified
         if not disease:
             return True
-
-        # Only reject very low confidence
-        if isinstance(confidence, (int, float)) and confidence < 20:
+        if disease in ("unclear", "unknown"):
             return True
-
-        # Only reject if disease field itself says unclear
-        if disease in ("unclear", "unknown", ""):
-            return True
-
         return False
 
     @staticmethod
