@@ -26,9 +26,9 @@ class MarketAgent:
         
         # Apply filters
         if crop_filter:
-            prices = [p for p in prices if crop_filter.lower() in p["commodity"].lower()]
+            prices = [p for p in prices if crop_filter.lower() in p.get("crop", "").lower()]
         if city_filter:
-            prices = [p for p in prices if city_filter.lower() in p["city"].lower()]
+            prices = [p for p in prices if city_filter.lower() in p.get("city", "").lower()]
 
         if not prices:
             return {
@@ -39,30 +39,14 @@ class MarketAgent:
                 "extra": {"crop": crop_filter or "", "city": city_filter or ""},
             }
 
-        if not self.client:
-            return self._fallback_message(prices, crop_filter, city_filter, language)
-
-        context = {
-            "crop_filter": crop_filter or "",
-            "city_filter": city_filter or "",
-            "prices": prices,
+        # Bypass Gemini entirely - use _format_response directly
+        return {
+            "agent": "market_agent",
+            "confidence": 80,
+            "urgency": "low",
+            "urdu_message": self._format_response(prices, language),
+            "extra": {"crop": crop_filter or "", "city": city_filter or ""},
         }
-        parts = [
-            MARKET_AGENT_PROMPT,
-            f"Mandi price data (use only this data): {json.dumps(context, ensure_ascii=False)}",
-            self._language_instruction(language),
-            "Return JSON only without code fences.",
-        ]
-        result = await asyncio.to_thread(self.client.generate_json, parts)
-        if not isinstance(result, dict):
-            return self._fallback_message(prices, crop_filter, city_filter, language)
-
-        result.setdefault("agent", "market_agent")
-        result.setdefault("confidence", 0)
-        result.setdefault("urgency", "low")
-        result.setdefault("urdu_message", self._format_response(prices, language))
-        result.setdefault("extra", {"crop": crop_filter or "", "city": city_filter or ""})
-        return result
 
     def _fallback_message(
         self,
