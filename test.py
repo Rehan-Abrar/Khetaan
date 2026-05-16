@@ -16,7 +16,7 @@ async def main() -> None:
         ("Weather", "pani 31.5204,74.3587", None),
         ("Market", "gandum price", None),
         ("Help", "help", None),
-        ("Disease-no-image", "meri fasal", None),
+        ("Disease-no-image", "mere gandum ke patte pe zang ke daag hain", None),
     ]
 
     image_path = Path("reference_images/wheat_leaf_rust_1.jpg")

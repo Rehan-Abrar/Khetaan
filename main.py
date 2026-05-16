@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 import httpx
-import google.generativeai as genai
+from google import genai
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
 
@@ -149,16 +149,17 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
     if not GEMINI_API_KEY:
         return ""
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(DEFAULT_MODEL)
-        transcript = model.generate_content(
-            [
+        from google.genai import types as genai_types
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model=DEFAULT_MODEL,
+            contents=[
                 "Transcribe this voice note into Roman Urdu using Latin letters only. "
                 "Do not use Urdu script. Return only the transcribed text.",
-                {"mime_type": "audio/ogg", "data": audio_bytes},
-            ]
+                genai_types.Part.from_bytes(data=audio_bytes, mime_type="audio/ogg"),
+            ],
         )
-        return (getattr(transcript, "text", "") or "").strip()
+        return (response.text or "").strip()
     except Exception as exc:
         print(f"Audio transcription failed: {exc}")
         return ""

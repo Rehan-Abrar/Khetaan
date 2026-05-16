@@ -46,6 +46,11 @@ class CropAgent:
         if not isinstance(result.get("suggestions"), list):
             result["suggestions"] = []
 
+        # Normalize confidence to 0-100 (some models return 0.0-1.0)
+        conf = result.get("confidence", 0)
+        if isinstance(conf, float) and conf <= 1.0:
+            result["confidence"] = int(conf * 100)
+
         if self._looks_unclear(result):
             return self._build_unclear_response(language)
 
@@ -80,6 +85,10 @@ class CropAgent:
         confidence = result.get("confidence", 0)
         disease = str(result.get("disease", "")).strip().lower()
         message = str(result.get("urdu_message", "")).strip().lower()
+
+        # Normalize confidence to 0-100 scale (some models return 0-1 floats)
+        if isinstance(confidence, float) and confidence <= 1.0:
+            confidence = confidence * 100
 
         if isinstance(confidence, (int, float)) and confidence < 35:
             return True
