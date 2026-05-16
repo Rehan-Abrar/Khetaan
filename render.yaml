@@ -2,10 +2,17 @@ services:
   - type: web
     name: khetaan
     env: python
+    pythonVersion: "3.12.0"
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY1
+        sync: false
+      - key: GEMINI_API_KEY2
+        sync: false
+      - key: GEMINI_API_KEY3
         sync: false
       - key: WHATSAPP_ACCESS_TOKEN
         sync: false
