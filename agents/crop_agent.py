@@ -53,6 +53,9 @@ class CropAgent:
         if not isinstance(result, dict):
             return self._build_unclear_response(language)
 
+        # Debug log
+        print(f"[CropAgent] Gemini result: disease={result.get('disease')}, confidence={result.get('confidence')}", file=sys.stderr)
+
         result.setdefault("agent", "disease_agent")
         result.setdefault("disease", "")
         result.setdefault("confidence", 0)

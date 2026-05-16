@@ -83,22 +83,30 @@ async def receive_message(request: Request) -> dict:
 
         print(f"Webhook inbound sender={sender} type={msg_type} text={message_text!r}")
 
-        # Route through orchestrator
+        # Return 200 immediately to prevent Meta retries
+        # Process the message in background
+        import asyncio
+        asyncio.create_task(_process_message(sender, message_text, image_bytes, media_type))
+
+    except Exception as e:
+        print(f"Webhook error: {e}")
+
+    return {"status": "ok"}  # always return 200 to Meta
+
+
+async def _process_message(sender: str, message_text: str, image_bytes: bytes | None, media_type: str | None) -> None:
+    """Process message in background to avoid webhook timeout."""
+    try:
         reply = await orchestrator.route(
             message=message_text,
             image_bytes=image_bytes,
             sender=sender,
             media_type=media_type,
         )
-
         print(f"Webhook reply sender={sender} reply={reply!r}")
-
         await send_whatsapp_message(sender, reply)
-
     except Exception as e:
-        print(f"Webhook error: {e}")
-
-    return {"status": "ok"}  # always return 200 to Meta
+        print(f"Background processing error: {e}")
 
 
 # ── Send reply ──
