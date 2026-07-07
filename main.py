@@ -183,8 +183,32 @@ async def download_media(media_id: str) -> bytes:
         return file_resp.content
 
 
-# ── Transcribe audio via Gemini ──
+# ── Transcribe audio via Groq (Whisper) or Gemini ──
 async def transcribe_audio(audio_bytes: bytes) -> str:
+    groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if groq_api_key:
+        try:
+            url = "https://api.groq.com/openai/v1/audio/transcriptions"
+            headers = {
+                "Authorization": f"Bearer {groq_api_key}"
+            }
+            files = {
+                "file": ("audio.ogg", audio_bytes, "audio/ogg")
+            }
+            data = {
+                "model": "whisper-large-v3",
+                "prompt": "Transcribe this voice note into Roman Urdu using Latin letters only. Do not use Urdu script. Return only the transcribed text."
+            }
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, headers=headers, files=files, data=data)
+                if resp.status_code == 200:
+                    return (resp.json().get("text") or "").strip()
+                else:
+                    print(f"Groq transcription error {resp.status_code}: {resp.text}")
+        except Exception as exc:
+            print(f"Groq audio transcription failed: {exc}")
+
+    # Fallback to Gemini if Groq failed or is not configured
     if not GEMINI_API_KEY:
         return ""
     try:
