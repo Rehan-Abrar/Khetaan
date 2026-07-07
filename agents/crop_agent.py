@@ -36,11 +36,8 @@ class CropAgent:
             self._language_instruction(language),
         ]
 
-        if self.reference_images:
-            parts.append("Reference images (known examples):")
-            for index, ref in enumerate(self.reference_images, start=1):
-                parts.append(f"Reference image {index} - {ref['label']} ({ref['filename']})")
-                parts.append({"mime_type": ref["mime_type"], "data": ref["data"]})
+        # Removed reference images to drastically save tokens and prevent Groq 429 TPM limits.
+
 
         parts.extend(
             [
@@ -96,17 +93,14 @@ class CropAgent:
     def _compress_image(
         image_bytes: bytes,
         mime_type: str,
-        max_size_kb: int = 150,
     ) -> tuple[bytes, str]:
         from PIL import Image
         import io
-        if len(image_bytes) <= max_size_kb * 1024:
-            return image_bytes, mime_type
         try:
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            img.thumbnail((600, 600), Image.Resampling.LANCZOS)
+            img.thumbnail((800, 800), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=60)
+            img.save(buf, format="JPEG", quality=75)
             return buf.getvalue(), "image/jpeg"
         except Exception:
             return image_bytes, mime_type
