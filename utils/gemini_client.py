@@ -163,7 +163,7 @@ class GeminiClient:
         }
 
         try:
-            with httpx.Client(timeout=25.0) as client:
+            with httpx.Client(timeout=8.0) as client:
                 resp = client.post(url, headers=headers, json=payload)
                 if resp.status_code == 200:
                     result_json = resp.json()
