@@ -204,9 +204,16 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
                 if resp.status_code == 200:
                     return (resp.json().get("text") or "").strip()
                 else:
-                    print(f"Groq transcription error {resp.status_code}: {resp.text}")
+                    err_msg = f"Groq transcription error {resp.status_code}: {resp.text}"
+                    print(err_msg)
+                    # Log to file for diagnostics
+                    with open("transcribe_error.log", "a", encoding="utf-8") as f:
+                        f.write(f"{err_msg}\n")
         except Exception as exc:
-            print(f"Groq audio transcription failed: {exc}")
+            err_msg = f"Groq audio transcription exception: {exc}"
+            print(err_msg)
+            with open("transcribe_error.log", "a", encoding="utf-8") as f:
+                f.write(f"{err_msg}\n")
 
     # Fallback to Gemini if Groq failed or is not configured
     if not GEMINI_API_KEY:
