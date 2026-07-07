@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from agents.prompts import DISEASE_AGENT_PROMPT, DISEASE_TEXT_PROMPT
+from config import PROTO_DISEASE_IMAGE_RESPONSE, PROTO_DISEASE_TEXT_RESPONSE, PROTOTYPE_MODE
 from utils.gemini_client import GeminiClient
 
 
@@ -24,6 +25,11 @@ class CropAgent:
     ) -> dict:
         if not image_bytes:
             return self._build_missing_image_response(language)
+
+        # ── Prototype mode: skip API, return hardcoded response instantly ──
+        if PROTOTYPE_MODE:
+            print("[CropAgent] PROTOTYPE_MODE active — returning hardcoded image response.", flush=True)
+            return dict(PROTO_DISEASE_IMAGE_RESPONSE)
 
         if not self.client:
             return self._build_not_available_response(language)
@@ -67,6 +73,12 @@ class CropAgent:
 
     async def diagnose_text(self, description: str, language: str = "roman_urdu") -> dict:
         description = description or ""
+
+        # ── Prototype mode: skip API, return hardcoded response instantly ──
+        if PROTOTYPE_MODE:
+            print("[CropAgent] PROTOTYPE_MODE active — returning hardcoded text response.", flush=True)
+            return dict(PROTO_DISEASE_TEXT_RESPONSE)
+
         if not self.client:
             return self._build_photo_needed_response(language)
 
