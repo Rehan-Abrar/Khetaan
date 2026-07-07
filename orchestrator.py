@@ -78,9 +78,9 @@ class Orchestrator:
         language = self._detect_language(message)
         normalized = await self._normalize_message(message)
 
-        # ── Fast-path: image with no meaningful text ──
-        # Skip the Gemini router call (saves 5-10 s) so Meta doesn’t retry.
-        if image_bytes and len(message.strip()) < 20:
+        # ── Fast-path: always route images directly to disease_agent ──
+        # Avoids redundant Groq router call that pushes past the 25s timeout.
+        if image_bytes:  # always fast-path images to disease_agent
             agent_names = ["disease_agent"]
         else:
             router_result = await self.router.route(

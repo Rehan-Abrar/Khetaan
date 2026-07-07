@@ -197,7 +197,6 @@ _MIME_TO_EXT = {
 }
 
 async def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg; codecs=opus") -> str:
-    import io
     from groq import Groq as GroqSDK
 
     groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
@@ -210,7 +209,7 @@ async def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg; code
             def _do_transcribe() -> str:
                 client = GroqSDK(api_key=groq_api_key)
                 transcription = client.audio.transcriptions.create(
-                    file=(filename, io.BytesIO(audio_bytes)),
+                    file=(filename, audio_bytes),
                     model="whisper-large-v3-turbo",
                     prompt="Transcribe this voice note into Roman Urdu using Latin letters only. Do not use Urdu script. Return only the transcribed text.",
                     response_format="text",
