@@ -58,6 +58,9 @@ def _get_api_keys() -> list[str]:
 
 
 class GeminiClient:
+    _last_failure_time: float = 0.0
+    _cooldown_seconds: float = 45.0  # Cooldown period in seconds if all keys are exhausted
+
     def __init__(self, model_name: str | None = None) -> None:
         self.api_keys = _get_api_keys()
         if not self.api_keys:
@@ -81,6 +84,12 @@ class GeminiClient:
         temperature: float = 0.2,
         max_output_tokens: int = 1024,
     ) -> dict[str, Any] | None:
+        # Check circuit breaker
+        now = time.time()
+        if now - GeminiClient._last_failure_time < GeminiClient._cooldown_seconds:
+            print("[GeminiClient] Circuit breaker is open. Fast-failing request.", file=sys.stderr)
+            return None
+
         # Convert parts to google.genai content format
         contents: list[Any] = []
         for part in parts:
@@ -171,7 +180,10 @@ class GeminiClient:
                 break
 
         if response is None:
+            # Tripped circuit breaker
+            GeminiClient._last_failure_time = time.time()
             return None
 
         text = response.text or ""
         return _extract_json_object(text)
+
