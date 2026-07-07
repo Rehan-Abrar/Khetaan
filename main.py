@@ -106,8 +106,9 @@ async def receive_message(request: Request) -> dict:
 
         elif msg_type in ("audio", "voice"):
             media_id = msg[msg_type]["id"]
+            audio_mime = msg[msg_type].get("mime_type") or "audio/ogg; codecs=opus"
             audio_bytes = await download_media(media_id)
-            message_text = await transcribe_audio(audio_bytes)
+            message_text = await transcribe_audio(audio_bytes, audio_mime)
             if not message_text:
                 await send_whatsapp_message(
                     sender,
@@ -184,7 +185,23 @@ async def download_media(media_id: str) -> bytes:
 
 
 # ── Transcribe audio via Groq (Whisper) or Gemini ──
-async def transcribe_audio(audio_bytes: bytes) -> str:
+_MIME_TO_EXT = {
+    "audio/ogg": "ogg",
+    "audio/ogg; codecs=opus": "ogg",
+    "audio/opus": "opus",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/wav": "wav",
+    "audio/webm": "webm",
+    "audio/flac": "flac",
+}
+
+async def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg; codecs=opus") -> str:
+    # Derive the correct file extension for Groq's format detection
+    mime_base = mime_type.split(";")[0].strip().lower()
+    ext = _MIME_TO_EXT.get(mime_base, "ogg")
+    filename = f"audio.{ext}"
+
     groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
     if groq_api_key:
         try:
@@ -193,10 +210,10 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
                 "Authorization": f"Bearer {groq_api_key}"
             }
             files = {
-                "file": ("audio.ogg", audio_bytes, "audio/ogg")
+                "file": (filename, audio_bytes, mime_base)
             }
             data = {
-                "model": "whisper-large-v3",
+                "model": "whisper-large-v3-turbo",
                 "prompt": "Transcribe this voice note into Roman Urdu using Latin letters only. Do not use Urdu script. Return only the transcribed text."
             }
             async with httpx.AsyncClient(timeout=15) as client:
@@ -204,9 +221,8 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
                 if resp.status_code == 200:
                     return (resp.json().get("text") or "").strip()
                 else:
-                    err_msg = f"Groq transcription error {resp.status_code}: {resp.text}"
+                    err_msg = f"Groq transcription error {resp.status_code} mime={mime_type!r}: {resp.text}"
                     print(err_msg)
-                    # Log to file for diagnostics
                     with open("transcribe_error.log", "a", encoding="utf-8") as f:
                         f.write(f"{err_msg}\n")
         except Exception as exc:
