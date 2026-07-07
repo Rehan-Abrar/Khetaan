@@ -51,7 +51,9 @@ class CropAgent:
         )
         result = await asyncio.to_thread(self.client.generate_json, parts)
         if not isinstance(result, dict):
-            return self._build_unclear_response(language)
+            # generate_json returned None — most likely a quota/API error,
+            # not an unclear photo. Return an honest service-unavailable reply.
+            return self._build_service_error_response(language)
 
         result.setdefault("agent", "disease_agent")
         result.setdefault("disease", "")
@@ -155,16 +157,21 @@ class CropAgent:
         confidence = result.get("confidence", 0)
         disease = str(result.get("disease", "")).strip().lower()
 
-        # Only reject if genuinely no disease identified
+        # Empty disease field — genuinely no result
         if not disease:
             return True
 
-        # Only reject very low confidence
-        if isinstance(confidence, (int, float)) and confidence < 20:
-            return True
+        # Explicitly unclear or unknown
+        if disease in ("unclear", "unknown"):
+            # Only treat as unclear if confidence is also very low
+            if isinstance(confidence, (int, float)) and confidence < 30:
+                return True
+            # If Gemini says "unclear" but confidence is reasonable,
+            # trust the urdu_message it wrote and pass through
+            return False
 
-        # Only reject if disease field itself says unclear
-        if disease in ("unclear", "unknown", ""):
+        # Very low confidence on any disease — image likely unusable
+        if isinstance(confidence, (int, float)) and confidence < 25:
             return True
 
         return False
@@ -232,6 +239,21 @@ class CropAgent:
             message = "I can help better with a crop photo. Please send one if possible."
         else:
             message = "Behtar tashkhees ke liye fasal ki tasveer bhej dein."
+        return {
+            "agent": "disease_agent",
+            "disease": "",
+            "confidence": 0,
+            "urgency": "low",
+            "urdu_message": message,
+            "suggestions": [],
+        }
+
+    @staticmethod
+    def _build_service_error_response(language: str) -> dict:
+        if language == "english":
+            message = "Diagnosis service is temporarily unavailable. Please try again in a few minutes."
+        else:
+            message = "Tashkhees ki service abhi dastiyab nahi. Thori dair baad dobara koshish karein."
         return {
             "agent": "disease_agent",
             "disease": "",

@@ -1,1 +1,17 @@
-{"updated": "2026-05-16T11:31:51.955172", "prices": [{"commodity": "Potato Fresh", "city": "Lahore", "min_price": "1100", "max_price": "1800", "unit": "per 40kg", "city_prices": {"Lahore": "1700", "Faisalabad": "1700", "Rawalpindi": "1800", "Multan": "1300", "Okara": "1100"}}, {"commodity": "Onion", "city": "Lahore", "min_price": "2500", "max_price": "5750", "unit": "per 40kg", "city_prices": {"Lahore": "5750", "Faisalabad": "5750", "Rawalpindi": "5700", "Multan": "2500", "Okara": "5250"}}, {"commodity": "Tomato", "city": "Lahore", "min_price": "1900", "max_price": "3850", "unit": "per 40kg", "city_prices": {"Lahore": "3050", "Faisalabad": "2950", "Rawalpindi": "3850", "Multan": "1900", "Okara": "2250"}}]}
+{
+  "updated": "2026-05-16T08:20:51Z",
+  "prices": [
+    {"commodity": "Gandum (Wheat)", "city": "Lahore", "min_price": "3200", "max_price": "3400", "unit": "per 40kg"},
+    {"commodity": "Gandum (Wheat)", "city": "Faisalabad", "min_price": "3150", "max_price": "3350", "unit": "per 40kg"},
+    {"commodity": "Potato Fresh", "city": "Lahore", "min_price": "1700", "max_price": "1850", "unit": "per 40kg"},
+    {"commodity": "Potato Fresh", "city": "Faisalabad", "min_price": "1700", "max_price": "1800", "unit": "per 40kg"},
+    {"commodity": "Onion", "city": "Lahore", "min_price": "5750", "max_price": "6200", "unit": "per 40kg"},
+    {"commodity": "Onion", "city": "Multan", "min_price": "2500", "max_price": "2800", "unit": "per 40kg"},
+    {"commodity": "Tomato", "city": "Lahore", "min_price": "3050", "max_price": "3400", "unit": "per 40kg"},
+    {"commodity": "Tomato", "city": "Rawalpindi", "min_price": "3850", "max_price": "4200", "unit": "per 40kg"},
+    {"commodity": "Garlic (Local)", "city": "Lahore", "min_price": "12350", "max_price": "13000", "unit": "per 40kg"},
+    {"commodity": "Green Chilli", "city": "Multan", "min_price": "5250", "max_price": "5800", "unit": "per 40kg"},
+    {"commodity": "Kapas (Cotton)", "city": "Multan", "min_price": "8500", "max_price": "9200", "unit": "per 40kg"},
+    {"commodity": "Chawal (Rice)", "city": "Gujranwala", "min_price": "4200", "max_price": "4800", "unit": "per 40kg"}
+  ]
+}

@@ -77,18 +77,25 @@ class Orchestrator:
         history = self._append_history(sender, "user", message or "[media]")
         language = self._detect_language(message)
         normalized = await self._normalize_message(message)
-        router_result = await self.router.route(
-            normalized,
-            image_present=bool(image_bytes),
-            history=history,
-        )
-        agent_names = router_result.get("agents", []) if isinstance(router_result, dict) else []
 
-        if self._looks_like_weather_question(message, normalized) and "weather_agent" not in agent_names:
-            agent_names.append("weather_agent")
+        # ── Fast-path: image with no meaningful text ──
+        # Skip the Gemini router call (saves 5-10 s) so Meta doesn’t retry.
+        if image_bytes and len(message.strip()) < 20:
+            agent_names = ["disease_agent"]
+        else:
+            router_result = await self.router.route(
+                normalized,
+                image_present=bool(image_bytes),
+                history=history,
+            )
+            agent_names = router_result.get("agents", []) if isinstance(router_result, dict) else []
 
-        if isinstance(agent_names, list) and len(agent_names) > 1:
-            agent_names = [name for name in agent_names if name != "help_agent"]
+            if self._looks_like_weather_question(message, normalized) and "weather_agent" not in agent_names:
+                agent_names.append("weather_agent")
+
+            # Don’t mix help_agent with other real agents
+            if isinstance(agent_names, list) and len(agent_names) > 1:
+                agent_names = [name for name in agent_names if name != "help_agent"]
 
         tasks = []
         if "disease_agent" in agent_names:

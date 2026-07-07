@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
+from google.genai import types
 
 from orchestrator import Orchestrator
 from utils.gemini_client import DEFAULT_MODEL, GeminiClient
@@ -19,6 +22,25 @@ VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "khetaan_verify_123")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
 META_GRAPH_API_VERSION = os.getenv("WHATSAPP_GRAPH_API_VERSION", "v25.0")
+
+# ── Deduplication guard ────────────────────────────────────────────────────
+# Meta retries the webhook if we take >5s to respond. We track processed
+# message IDs for 60 s so retries are silently dropped.
+_PROCESSED: dict[str, float] = {}  # msg_id -> epoch time
+_DEDUP_TTL = 60  # seconds
+
+
+def _is_duplicate(msg_id: str) -> bool:
+    """Return True if this message was already processed (a retry)."""
+    now = time.monotonic()
+    # Expire old entries
+    expired = [k for k, t in _PROCESSED.items() if now - t > _DEDUP_TTL]
+    for k in expired:
+        del _PROCESSED[k]
+    if msg_id in _PROCESSED:
+        return True
+    _PROCESSED[msg_id] = now
+    return False
 
 
 def _messages_url() -> str:
@@ -52,8 +74,14 @@ async def receive_message(request: Request) -> dict:
             return {"status": "ok"}
 
         msg = entry["messages"][0]
+        msg_id: str = msg.get("id", "")
         sender: str = msg["from"]  # farmer's WhatsApp number (E.164)
         msg_type: str = msg["type"]
+
+        # ── Dedup: silently drop Meta webhook retries ──────────────────────
+        if msg_id and _is_duplicate(msg_id):
+            print(f"Webhook duplicate dropped msg_id={msg_id} sender={sender}")
+            return {"status": "ok"}
 
         message_text = ""
         image_bytes: bytes | None = None
@@ -72,7 +100,7 @@ async def receive_message(request: Request) -> dict:
                 print(f"Image download failed sender={sender} error={exc}")
                 await send_whatsapp_message(
                     sender,
-                    "Tasveer process nahi ho saki, meherbani clear photo bhejein.",
+                    "Tasveer download nahi ho saki. Meherbani dobara bhejein.",
                 )
                 return {"status": "ok"}
 
@@ -80,16 +108,28 @@ async def receive_message(request: Request) -> dict:
             media_id = msg[msg_type]["id"]
             audio_bytes = await download_media(media_id)
             message_text = await transcribe_audio(audio_bytes)
+            if not message_text:
+                await send_whatsapp_message(
+                    sender,
+                    "Voice note suna, lekin samajh nahi aaya. Meherbani text mein likhein.",
+                )
+                return {"status": "ok"}
 
         print(f"Webhook inbound sender={sender} type={msg_type} text={message_text!r}")
 
-        # Route through orchestrator
-        reply = await orchestrator.route(
-            message=message_text,
-            image_bytes=image_bytes,
-            sender=sender,
-            media_type=media_type,
-        )
+        # Route through orchestrator — cap at 25 s so Meta doesn't retry
+        try:
+            reply = await asyncio.wait_for(
+                orchestrator.route(
+                    message=message_text,
+                    image_bytes=image_bytes,
+                    sender=sender,
+                    media_type=media_type,
+                ),
+                timeout=25.0,
+            )
+        except asyncio.TimeoutError:
+            reply = "Jawab tayyar karne mein zyada waqt lag raha hai. Thori dair baad dobara poochein."
 
         print(f"Webhook reply sender={sender} reply={reply!r}")
 
@@ -149,12 +189,16 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
         return ""
     try:
         client = GeminiClient()
+        audio_part = types.Part.from_bytes(
+            data=audio_bytes,
+            mime_type="audio/ogg",
+        )
         response = client.client.models.generate_content(
             model=client.model_name,
             contents=[
                 "Transcribe this voice note into Roman Urdu using Latin letters only. "
                 "Do not use Urdu script. Return only the transcribed text.",
-                {"mime_type": "audio/ogg", "data": audio_bytes},
+                audio_part,
             ],
             config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=512),
         )
