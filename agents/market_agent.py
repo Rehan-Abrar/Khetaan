@@ -8,6 +8,20 @@ from scrapers.punjab_mandi import scrape_punjab_mandi
 from utils.gemini_client import GeminiClient
 
 
+CROP_MAPPING = {
+    "gandum": "wheat",
+    "chawal": "rice",
+    "kapas": "cotton",
+    "makai": "maize",
+    "ganna": "sugarcane",
+    "chanay": "gram",
+    "chana": "gram",
+    "aloo": "potato",
+    "tamatar": "tomato",
+    "piyaz": "onion",
+}
+
+
 class MarketAgent:
     def __init__(self, model_name: str | None = None) -> None:
         try:
@@ -16,13 +30,18 @@ class MarketAgent:
             self.client = None
 
     async def get_prices(self, crop_filter: str | None = None, language: str = "roman_urdu") -> dict:
-        prices = scrape_punjab_mandi()
+        result = scrape_punjab_mandi(language=language)
+        prices = result.get("prices", []) if isinstance(result, dict) else []
+
         if crop_filter:
             filtered: list[dict] = []
+            filter_lower = crop_filter.lower()
+            mapped = CROP_MAPPING.get(filter_lower, filter_lower)
             for item in prices:
                 if not isinstance(item, dict):
                     continue
-                if crop_filter in str(item.get("crop", "")):
+                commodity = str(item.get("commodity", "") or item.get("crop", "")).lower()
+                if filter_lower in commodity or mapped in commodity:
                     filtered.append(item)
             prices = filtered
 
@@ -48,16 +67,16 @@ class MarketAgent:
             self._language_instruction(language),
             "Return JSON only without code fences.",
         ]
-        result = await asyncio.to_thread(self.client.generate_json, parts)
-        if not isinstance(result, dict):
+        result_json = await asyncio.to_thread(self.client.generate_json, parts)
+        if not isinstance(result_json, dict):
             return self._fallback_message(prices, crop_filter, language)
 
-        result.setdefault("agent", "market_agent")
-        result.setdefault("confidence", 0)
-        result.setdefault("urgency", "low")
-        result.setdefault("urdu_message", self._simple_summary(prices, language))
-        result.setdefault("extra", {"crop": crop_filter or "", "price": ""})
-        return result
+        result_json.setdefault("agent", "market_agent")
+        result_json.setdefault("confidence", 0)
+        result_json.setdefault("urgency", "low")
+        result_json.setdefault("urdu_message", self._simple_summary(prices, language))
+        result_json.setdefault("extra", {"crop": crop_filter or "", "price": ""})
+        return result_json
 
     def _fallback_message(self, prices: list[dict], crop_filter: str | None, language: str) -> dict:
         return {
@@ -74,10 +93,17 @@ class MarketAgent:
         for item in prices[:5]:
             if not isinstance(item, dict):
                 continue
-            crop = item.get("crop", "")
-            price = item.get("price", "")
-            if crop or price:
-                lines.append(f"{crop} {price}".strip())
+            commodity = item.get("commodity", "") or item.get("crop", "")
+            min_price = item.get("min_price", "")
+            max_price = item.get("max_price", "")
+            
+            if min_price and max_price:
+                price_str = f"Rs {min_price}-{max_price}"
+            else:
+                price_str = item.get("price", "")
+                
+            if commodity or price_str:
+                lines.append(f"{commodity} {price_str}".strip())
 
         if not lines:
             return MarketAgent._no_prices_message(language)

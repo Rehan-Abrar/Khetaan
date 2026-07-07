@@ -11,10 +11,20 @@ from google.genai import types
 
 from orchestrator import Orchestrator
 from utils.gemini_client import DEFAULT_MODEL, GeminiClient
+from voice import VoiceHandler, initialize_whisper
 
 load_dotenv()
 
 app = FastAPI(title="Khetaan", version="0.3.0")
+
+
+@app.on_event("startup")
+async def startup_event():
+    print("[Startup] Pre-loading Whisper model in the background...")
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, initialize_whisper)
+
+
 orchestrator = Orchestrator()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -112,7 +122,7 @@ async def receive_message(request: Request) -> dict:
             if not message_text:
                 await send_whatsapp_message(
                     sender,
-                    "Voice note suna, lekin samajh nahi aaya. Meherbani text mein likhein.",
+                    "I couldn't understand the voice note. Please try speaking a little more clearly or send a text message.",
                 )
                 return {"status": "ok"}
 
@@ -134,7 +144,25 @@ async def receive_message(request: Request) -> dict:
 
         print(f"Webhook reply sender={sender} reply={reply!r}")
 
+        # Always send the text response first
         await send_whatsapp_message(sender, reply)
+
+        # If incoming message was voice, also synthesize and send the voice reply
+        if msg_type in ("audio", "voice"):
+            try:
+                language = orchestrator._detect_language(message_text)
+                ogg_bytes = await VoiceHandler.handle_outgoing_voice(reply, language)
+                if ogg_bytes:
+                    outbound_media_id = await upload_audio_to_meta(ogg_bytes)
+                    if outbound_media_id:
+                        await send_whatsapp_audio(sender, outbound_media_id)
+                        print(f"Voice reply sent successfully to sender={sender}")
+                    else:
+                        print("[Voice] Meta media upload failed, skipping voice reply.")
+                else:
+                    print("[Voice] Voice synthesis failed, skipping voice reply.")
+            except Exception as exc:
+                print(f"[Voice] Outbound voice processing failed: {exc}")
 
     except Exception as e:
         print(f"Webhook error: {e}")
@@ -184,72 +212,84 @@ async def download_media(media_id: str) -> bytes:
         return file_resp.content
 
 
-# ── Transcribe audio via Groq (Whisper) or Gemini ──
-_MIME_TO_EXT = {
-    "audio/ogg": "ogg",
-    "audio/ogg; codecs=opus": "ogg",
-    "audio/opus": "opus",
-    "audio/mpeg": "mp3",
-    "audio/mp4": "m4a",
-    "audio/wav": "wav",
-    "audio/webm": "webm",
-    "audio/flac": "flac",
-}
-
+# ── Transcribe audio via local Whisper ──
 async def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg; codecs=opus") -> str:
-    from groq import Groq as GroqSDK
-
-    groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if groq_api_key:
-        try:
-            mime_base = mime_type.split(";")[0].strip().lower()
-            ext = _MIME_TO_EXT.get(mime_base, "ogg")
-            filename = f"audio.{ext}"
-
-            def _do_transcribe() -> str:
-                client = GroqSDK(api_key=groq_api_key)
-                transcription = client.audio.transcriptions.create(
-                    file=(filename, audio_bytes),
-                    model="whisper-large-v3-turbo",
-                    prompt="Transcribe this voice note into Roman Urdu using Latin letters only. Do not use Urdu script. Return only the transcribed text.",
-                    response_format="text",
-                )
-                return (transcription or "").strip()
-
-            result = await asyncio.to_thread(_do_transcribe)
-            if result:
-                print(f"Groq transcription success: {result[:80]!r}")
-                return result
-            else:
-                print("Groq transcription returned empty text.")
-        except Exception as exc:
-            err_msg = f"Groq audio transcription exception: {exc}"
-            print(err_msg)
-            with open("transcribe_error.log", "a", encoding="utf-8") as f:
-                f.write(f"{err_msg}\n")
-
-    # Fallback to Gemini if Groq failed or is not configured
-    if not GEMINI_API_KEY:
-        return ""
     try:
-        client = GeminiClient()
-        audio_part = types.Part.from_bytes(
-            data=audio_bytes,
-            mime_type="audio/ogg",
+        loop = asyncio.get_running_loop()
+        transcription = await loop.run_in_executor(
+            None,
+            VoiceHandler.handle_incoming_voice,
+            audio_bytes,
+            mime_type
         )
-        response = client.client.models.generate_content(
-            model=client.model_name,
-            contents=[
-                "Transcribe this voice note into Roman Urdu using Latin letters only. "
-                "Do not use Urdu script. Return only the transcribed text.",
-                audio_part,
-            ],
-            config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=512),
-        )
-        return (getattr(response, "text", "") or "").strip()
+        return transcription
     except Exception as exc:
-        print(f"Audio transcription failed: {exc}")
+        print(f"Local Whisper audio transcription failed: {exc}")
         return ""
+
+
+# ── Upload audio to Meta Graph API ──
+async def upload_audio_to_meta(audio_bytes: bytes) -> str | None:
+    if not ACCESS_TOKEN or not PHONE_NUMBER_ID:
+        print("Meta media upload skipped: ACCESS_TOKEN or PHONE_NUMBER_ID not set.")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+    }
+    files = {
+        "file": ("reply.ogg", audio_bytes, "audio/ogg"),
+    }
+    data = {
+        "messaging_product": "whatsapp",
+    }
+    
+    url = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{PHONE_NUMBER_ID}/media"
+    
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, headers=headers, files=files, data=data)
+            if resp.status_code == 200:
+                media_id = resp.json().get("id")
+                print(f"Meta media upload successful: media_id={media_id}")
+                return media_id
+            else:
+                print(f"Meta media upload failed ({resp.status_code}): {resp.text}")
+                return None
+    except Exception as exc:
+        print(f"Exception during Meta media upload: {exc}")
+        return None
+
+
+# ── Send audio reply ──
+async def send_whatsapp_audio(to: str, media_id: str) -> None:
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "audio",
+        "audio": {
+            "id": media_id
+        },
+    }
+    try:
+        messages_url = _messages_url()
+    except RuntimeError as exc:
+        print(f"Meta send audio skipped: {exc}")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(messages_url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                print(f"Send audio failed ({resp.status_code}): {resp.text}")
+    except Exception as exc:
+        print(f"Exception during send audio: {exc}")
+
 
 
 @app.get("/health")
