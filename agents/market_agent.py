@@ -32,6 +32,8 @@ class MarketAgent:
     async def get_prices(self, crop_filter: str | None = None, language: str = "roman_urdu") -> dict:
         result = scrape_punjab_mandi(language=language)
         prices = result.get("prices", []) if isinstance(result, dict) else []
+        if not isinstance(prices, list):
+            prices = []
 
         if crop_filter:
             filtered: list[dict] = []
@@ -96,12 +98,12 @@ class MarketAgent:
             commodity = item.get("commodity", "") or item.get("crop", "")
             min_price = item.get("min_price", "")
             max_price = item.get("max_price", "")
-            
+
             if min_price and max_price:
                 price_str = f"Rs {min_price}-{max_price}"
             else:
                 price_str = item.get("price", "")
-                
+
             if commodity or price_str:
                 lines.append(f"{commodity} {price_str}".strip())
 

@@ -11,18 +11,11 @@ from google.genai import types
 
 from orchestrator import Orchestrator
 from utils.gemini_client import DEFAULT_MODEL, GeminiClient
-from voice import VoiceHandler, initialize_whisper
+from voice import VoiceHandler
 
 load_dotenv()
 
 app = FastAPI(title="Khetaan", version="0.3.0")
-
-
-@app.on_event("startup")
-async def startup_event():
-    print("[Startup] Pre-loading Whisper model in the background...")
-    loop = asyncio.get_running_loop()
-    loop.run_in_executor(None, initialize_whisper)
 
 
 orchestrator = Orchestrator()
@@ -212,19 +205,71 @@ async def download_media(media_id: str) -> bytes:
         return file_resp.content
 
 
-# ── Transcribe audio via local Whisper ──
+# ── Transcribe audio via Groq Whisper (cloud) with Gemini fallback ──
+_MIME_TO_EXT = {
+    "audio/ogg": "ogg",
+    "audio/ogg; codecs=opus": "ogg",
+    "audio/opus": "opus",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/wav": "wav",
+    "audio/webm": "webm",
+    "audio/flac": "flac",
+}
+
 async def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg; codecs=opus") -> str:
+    from groq import Groq as GroqSDK
+
+    mime_base = mime_type.split(";")[0].strip().lower()
+    groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if groq_api_key:
+        try:
+            ext = _MIME_TO_EXT.get(mime_base, "ogg")
+            filename = f"audio.{ext}"
+
+            def _do_transcribe() -> str:
+                client = GroqSDK(api_key=groq_api_key)
+                transcription = client.audio.transcriptions.create(
+                    file=(filename, audio_bytes),
+                    model="whisper-large-v3-turbo",
+                    prompt="Transcribe this voice note into Roman Urdu using Latin letters only. Do not use Urdu script. Return only the transcribed text.",
+                    response_format="text",
+                )
+                return (transcription or "").strip()
+
+            result = await asyncio.to_thread(_do_transcribe)
+            if result:
+                print(f"Groq transcription success: {result[:80]!r}")
+                return result
+            else:
+                print("Groq transcription returned empty text.")
+        except Exception as exc:
+            err_msg = f"Groq audio transcription exception: {exc}"
+            print(err_msg)
+            with open("transcribe_error.log", "a", encoding="utf-8") as f:
+                f.write(f"{err_msg}\n")
+
+    # Fallback to Gemini if Groq failed or is not configured
+    if not GEMINI_API_KEY:
+        return ""
     try:
-        loop = asyncio.get_running_loop()
-        transcription = await loop.run_in_executor(
-            None,
-            VoiceHandler.handle_incoming_voice,
-            audio_bytes,
-            mime_type
+        client = GeminiClient()
+        audio_part = types.Part.from_bytes(
+            data=audio_bytes,
+            mime_type=mime_base,
         )
-        return transcription
+        response = client.client.models.generate_content(
+            model=client.model_name,
+            contents=[
+                "Transcribe this voice note into Roman Urdu using Latin letters only. "
+                "Do not use Urdu script. Return only the transcribed text.",
+                audio_part,
+            ],
+            config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=512),
+        )
+        return (getattr(response, "text", "") or "").strip()
     except Exception as exc:
-        print(f"Local Whisper audio transcription failed: {exc}")
+        print(f"Audio transcription failed: {exc}")
         return ""
 
 

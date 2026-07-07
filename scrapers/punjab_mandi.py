@@ -171,8 +171,36 @@ def _format_urdu_response(prices: list[dict[str, Any]], language: str = "roman_u
 
 def scrape_punjab_mandi(language: str = "roman_urdu") -> dict[str, Any]:
     """
-    Scrape Punjab AMIS for real mandi prices.
-    Returns dict with 'prices', 'urdu_message', and 'updated' timestamp.
+    Load cached Punjab AMIS mandi prices to avoid heavy live scraping in web request threads.
+    """
+    try:
+        if CACHE_PATH.exists():
+            with open(CACHE_PATH, encoding="utf-8") as f:
+                cache_data = json.load(f)
+            prices = cache_data.get("prices", [])
+            updated = cache_data.get("updated", datetime.now().isoformat())
+            if prices:
+                return {
+                    "prices": prices,
+                    "urdu_message": _format_urdu_response(prices, language),
+                    "updated": updated,
+                    "language": language
+                }
+    except Exception as e:
+        print(f"[MandiScraper] Error loading cache: {e}")
+        
+    prices = FALLBACK_PRICES.copy()
+    return {
+        "prices": prices,
+        "urdu_message": _format_urdu_response(prices, language),
+        "updated": datetime.now().isoformat(),
+        "language": language
+    }
+
+
+def scrape_punjab_mandi_live(language: str = "roman_urdu") -> dict[str, Any]:
+    """
+    Scrape Punjab AMIS for real mandi prices. (Run this only in background jobs/scripts).
     """
     all_prices: list[dict[str, Any]] = []
     
