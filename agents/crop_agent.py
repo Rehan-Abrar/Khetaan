@@ -135,7 +135,16 @@ class CropAgent:
             return []
 
         images: list[dict[str, str | bytes]] = []
+        seen_labels: set[str] = set()
         for path in sorted(ref_dir.glob("*.jpg")) + sorted(ref_dir.glob("*.jpeg")) + sorted(ref_dir.glob("*.png")):
+            label = self._label_reference(path.name)
+            # Keep only the first image per disease class to stay within Groq's 5-image limit
+            # (user photo counts as 1, so we allow max 3 reference images = 4 total < 5)
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+            if len(images) >= 3:
+                break
             try:
                 raw = path.read_bytes()
             except OSError:
@@ -145,7 +154,7 @@ class CropAgent:
             images.append(
                 {
                     "filename": path.name,
-                    "label": self._label_reference(path.name),
+                    "label": label,
                     "mime_type": compressed_mime,
                     "data": compressed,
                 }

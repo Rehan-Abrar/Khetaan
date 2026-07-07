@@ -197,34 +197,32 @@ _MIME_TO_EXT = {
 }
 
 async def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg; codecs=opus") -> str:
-    # Derive the correct file extension for Groq's format detection
-    mime_base = mime_type.split(";")[0].strip().lower()
-    ext = _MIME_TO_EXT.get(mime_base, "ogg")
-    filename = f"audio.{ext}"
+    import io
+    from groq import Groq as GroqSDK
 
     groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
     if groq_api_key:
         try:
-            url = "https://api.groq.com/openai/v1/audio/transcriptions"
-            headers = {
-                "Authorization": f"Bearer {groq_api_key}"
-            }
-            files = {
-                "file": (filename, audio_bytes, mime_base)
-            }
-            data = {
-                "model": "whisper-large-v3-turbo",
-                "prompt": "Transcribe this voice note into Roman Urdu using Latin letters only. Do not use Urdu script. Return only the transcribed text."
-            }
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(url, headers=headers, files=files, data=data)
-                if resp.status_code == 200:
-                    return (resp.json().get("text") or "").strip()
-                else:
-                    err_msg = f"Groq transcription error {resp.status_code} mime={mime_type!r}: {resp.text}"
-                    print(err_msg)
-                    with open("transcribe_error.log", "a", encoding="utf-8") as f:
-                        f.write(f"{err_msg}\n")
+            mime_base = mime_type.split(";")[0].strip().lower()
+            ext = _MIME_TO_EXT.get(mime_base, "ogg")
+            filename = f"audio.{ext}"
+
+            def _do_transcribe() -> str:
+                client = GroqSDK(api_key=groq_api_key)
+                transcription = client.audio.transcriptions.create(
+                    file=(filename, io.BytesIO(audio_bytes)),
+                    model="whisper-large-v3-turbo",
+                    prompt="Transcribe this voice note into Roman Urdu using Latin letters only. Do not use Urdu script. Return only the transcribed text.",
+                    response_format="text",
+                )
+                return (transcription or "").strip()
+
+            result = await asyncio.to_thread(_do_transcribe)
+            if result:
+                print(f"Groq transcription success: {result[:80]!r}")
+                return result
+            else:
+                print("Groq transcription returned empty text.")
         except Exception as exc:
             err_msg = f"Groq audio transcription exception: {exc}"
             print(err_msg)
