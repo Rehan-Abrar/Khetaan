@@ -141,11 +141,13 @@ class GeminiClient:
         for img in image_parts:
             user_content.append(img)
 
-        # Decide model
+        # Decide model and settings
         if image_parts:
             model = "meta-llama/llama-4-scout-17b-16e-instruct"
+            timeout = 22.0  # image upload + inference is slow over network
         else:
             model = "llama-3.3-70b-versatile"
+            timeout = 8.0
 
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
@@ -159,21 +161,24 @@ class GeminiClient:
             ],
             "temperature": temperature,
             "max_tokens": max_output_tokens,
-            "response_format": {"type": "json_object"}
         }
+        # response_format json_object is NOT supported by Groq vision models;
+        # only enable it for text-only requests.
+        if not image_parts:
+            payload["response_format"] = {"type": "json_object"}
 
         try:
-            with httpx.Client(timeout=8.0) as client:
+            with httpx.Client(timeout=timeout) as client:
                 resp = client.post(url, headers=headers, json=payload)
                 if resp.status_code == 200:
                     result_json = resp.json()
                     content = result_json["choices"][0]["message"]["content"]
                     return _extract_json_object(content)
                 else:
-                    print(f"[Groq] API Error {resp.status_code}: {resp.text}", file=sys.stderr)
+                    print(f"[Groq] API Error {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
                     return None
         except Exception as exc:
-            print(f"[Groq] Exception: {exc}", file=sys.stderr)
+            print(f"[Groq] Exception ({'vision' if image_parts else 'text'}): {exc}", file=sys.stderr)
             return None
 
     def _generate_json_gemini(
