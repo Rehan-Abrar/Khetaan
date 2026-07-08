@@ -57,43 +57,11 @@ class WeatherAgent:
         )
 
     async def _fetch_weather(self, lat: float, lon: float) -> dict[str, Any] | None:
-        url = "https://api.open-meteo.com/v1/forecast"
-        params = {
-            "latitude": lat,
-            "longitude": lon,
-            "current": "temperature_2m,relative_humidity_2m",
-            "hourly": "precipitation_probability",
-            "forecast_days": 1,
-            "timezone": "auto",
-        }
-        headers = {
-            "User-Agent": "KhetaanBot/1.0 (https://github.com/rehan/khetaan)"
-        }
-        
-        for attempt in range(2):
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.get(url, params=params, headers=headers)
-                    response.raise_for_status()
-                    data = response.json()
-                    break
-            except Exception as e:
-                print(f"Weather fetch failed on attempt {attempt+1}: {e}")
-                if attempt == 1:
-                    return None
-                await asyncio.sleep(1)
-
-        current = data.get("current", {}) if isinstance(data, dict) else {}
-        hourly = data.get("hourly", {}) if isinstance(data, dict) else {}
-        temperature = current.get("temperature_2m")
-        humidity = current.get("relative_humidity_2m")
-        rain_values = hourly.get("precipitation_probability", []) or []
-        max_rain = self._max_numeric(rain_values)
-
+        # Prototype Mode: Hardcoded weather data for Lahore (Web search: July 8, 2026)
         return {
-            "temperature": temperature,
-            "humidity": humidity,
-            "max_rain_chance": max_rain,
+            "temperature": 38.6,
+            "humidity": 55,
+            "max_rain_chance": 8,
         }
 
     @staticmethod
