@@ -59,7 +59,7 @@ class WeatherAgent:
     async def _fetch_weather(self, lat: float, lon: float) -> dict[str, Any] | None:
         from config import PROTOTYPE_MODE
         if PROTOTYPE_MODE:
-            # Prototype Mode: Hardcoded weather data for Lahore (Web search: July 8, 2026)
+            # Prototype Mode: Hardcoded weather data for Lahore (Updated July 8, 2026)
             return {
                 "temperature": 38.6,
                 "humidity": 55,
